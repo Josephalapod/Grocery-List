@@ -1626,9 +1626,13 @@ function shouldExcludeIngredient(name) {
     /^cooking spray$/,
     /^non-?stick spray$/,
     /^nonstick spray$/,
-    /^salt and pepper$/,      // too generic, usually "to taste"
+    /^salt and pepper$/,
     /^salt and pepper to taste$/,
-    /^$/,                      // empty
+    /^boneless$/,              // junk leftover from bad parse
+    /^skinless$/,
+    /^boneless skinless$/,
+    /^to taste$/,
+    /^$/,
   ];
   return excludes.some(re => re.test(n));
 }
@@ -1669,7 +1673,7 @@ function categorizeIngredient(name) {
 function normalizeIngredientName(name) {
   let n = name.toLowerCase().trim();
 
-  // Remove common preparation/form modifiers
+  // Remove common preparation/form modifiers (multiple passes)
   const modifiers = [
     'fresh ', 'freshly ', 'dried ', 'ground ', 'minced ', 'chopped ', 'diced ',
     'sliced ', 'crushed ', 'grated ', 'shredded ', 'whole ', 'large ', 'small ',
@@ -1683,19 +1687,24 @@ function normalizeIngredientName(name) {
     'broken ', 'crumbled ', 'squeezed ', 'freshly squeezed ',
     'nacho-flavored ', 'flavored ', 'plain ', 'sweet ',
     'ripe ', 'firm ', 'soft ', 'warm ', 'hot ', 'cold ',
-    'packed ', 'loosely ', 'tightly ',
+    'packed ', 'loosely ', 'tightly ', 'dry ',
   ];
-  // Apply multiple passes
   for (let i = 0; i < 3; i++) {
     modifiers.forEach(mod => { n = n.replace(new RegExp('^' + mod.replace('-', '\\-'), 'i'), ''); });
   }
   n = n.trim();
 
-  // Strip trailing descriptors in parens: "butter (unsalted)" -> "butter"
+  // Strip trailing descriptors in parens
   n = n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/[()]/g, '').trim();
 
   // Remove notes after comma
   n = n.replace(/,\s*.*$/, '').trim();
+
+  // Handle "juice of N lime" → "lime juice"
+  n = n.replace(/^juice\s+of\s+\d+\s+/i, '');
+  n = n.replace(/^juice\s+and\s+zest\s+of\s+\d+\s+/i, '');
+  n = n.replace(/^zest\s+and\s+juice\s+of\s+\d+\s+/i, '');
+  n = n.replace(/^zest\s+of\s+\d+\s+/i, '');
 
   // Simplify meat
   n = n.replace(/\s+halves$/i, '');
@@ -1704,18 +1713,24 @@ function normalizeIngredientName(name) {
   n = n.replace(/\s+fillets?$/i, '');
   n = n.replace(/\s+cutlets?$/i, '');
 
+  // Strip leftover patterns
+  n = n.replace(/^to\s+\d+\s+/i, '');
+  n = n.replace(/^ears?\s+of\s+/i, '');
+  n = n.replace(/^of\s+/i, '');
+
   // Normalize common ingredient synonyms/variants
   const synonyms = [
-    [['garlic cloves', 'garlic clove', 'cloves garlic', 'clove garlic', 'cloves of garlic', 'clove of garlic'], 'garlic'],
-    [['green onions', 'green onion', 'scallions', 'scallion', 'spring onions', 'spring onion'], 'green onions'],
-    [['bell pepper', 'bell peppers'], 'bell pepper'],
+    [['garlic cloves', 'garlic clove', 'cloves garlic', 'clove garlic', 'cloves of garlic', 'clove of garlic', 'garlic'], 'garlic'],
+    [['green onions', 'green onion', 'scallions', 'scallion', 'spring onions', 'spring onion'], 'green onion'],
+    [['bell pepper', 'bell peppers', 'green bell pepper', 'green bell peppers', 'red bell pepper', 'red bell peppers', 'orange bell pepper', 'orange bell peppers', 'yellow bell pepper', 'yellow bell peppers', 'red bell or orange bell peppers', 'red or orange bell peppers', 'green pepper', 'red pepper', 'sweet red pepper', 'sweet green pepper'], 'bell pepper'],
     [['black pepper', 'pepper', 'black peppercorns', 'peppercorns'], 'black pepper'],
-    [['kosher salt', 'sea salt', 'table salt', 'fine salt', 'flaky salt'], 'salt'],
+    [['kosher salt', 'sea salt', 'table salt', 'fine salt', 'flaky salt', 'seasoned salt'], 'salt'],
     [['olive oil', 'evoo'], 'olive oil'],
     [['vegetable oil', 'canola oil', 'neutral oil'], 'vegetable oil'],
-    [['soy sauce', 'tamari', 'shoyu'], 'soy sauce'],
-    [['lemon juice', 'juice of lemon', 'juice of a lemon', 'lemons juiced'], 'lemon juice'],
-    [['lime juice', 'juice of lime', 'juice of a lime', 'limes juiced', 'freshly squeezed lime juice'], 'lime juice'],
+    [['soy sauce', 'tamari', 'shoyu', 'sodium soy sauce'], 'soy sauce'],
+    [['lemon juice', 'juice of lemon', 'juice of a lemon', 'lemons juiced', 'lemon', 'lemons'], 'lemon juice'],
+    [['lime juice', 'juice of lime', 'juice of a lime', 'limes juiced', 'lime', 'limes', 'freshly squeezed lime juice', 'juice of 1 lime', 'juice and zest of 2 limes', 'juice of 2 limes'], 'lime juice'],
+    [['lime zest', 'zest of lime', 'zest of a lime', 'zest of 1 lime', 'zest of 2 limes'], 'lime zest'],
     [['parmesan cheese', 'parmigiano reggiano', 'parmigiano', 'parmesan'], 'parmesan'],
     [['heavy cream', 'heavy whipping cream', 'whipping cream'], 'heavy cream'],
     [['cilantro', 'fresh cilantro', 'coriander leaves'], 'cilantro'],
@@ -1723,13 +1738,17 @@ function normalizeIngredientName(name) {
     [['ginger', 'fresh ginger', 'ginger root', 'gingerroot'], 'ginger'],
     [['jalapeno', 'jalapeño', 'jalapeno pepper', 'jalapeño pepper'], 'jalapeño'],
     [['red pepper flakes', 'crushed red pepper', 'red chili flakes', 'chili flakes'], 'red pepper flakes'],
-    [['chicken breast', 'chicken breasts'], 'chicken breast'],
+    [['chicken breast', 'chicken breasts', 'chicken', 'chicken breast halves'], 'chicken breast'],
+    [['chicken thigh', 'chicken thighs'], 'chicken thigh'],
     [['salmon fillet', 'salmon fillets', 'salmon'], 'salmon'],
-    [['taco seasoning', 'taco seasoning mix', 'envelope taco seasoning', 'envelope reduced-sodium taco seasoning', 'envelope reduced sodium taco seasoning', 'packet taco seasoning'], 'taco seasoning'],
+    [['ground beef', 'beef', 'lean ground beef'], 'ground beef'],
+    [['taco seasoning', 'taco seasoning mix', 'envelope taco seasoning', 'envelope reduced-sodium taco seasoning', 'envelope reduced sodium taco seasoning', 'packet taco seasoning', 'reduced-sodium taco seasoning', 'reduced sodium taco seasoning'], 'taco seasoning'],
     [['tortilla chips', 'nacho-flavored tortilla chips', 'corn tortilla chips'], 'tortilla chips'],
-    [['corn', 'corn kernels', 'ears of corn', 'ear of corn', 'sweet corn'], 'corn'],
+    [['corn', 'corn kernels', 'ears of corn', 'ear of corn', 'sweet corn', 'corn on the cob'], 'corn'],
     [['tomatoes', 'tomato', 'diced tomatoes'], 'tomatoes'],
-    [['onion', 'onions', 'yellow onion', 'yellow onions', 'white onion', 'white onions'], 'onion'],
+    [['onion', 'onions', 'yellow onion', 'yellow onions', 'white onion', 'white onions', 'red onion', 'red onions'], 'onion'],
+    [['flour tortillas', 'flour tortilla', 'tortillas', 'tortilla'], 'tortillas'],
+    [['fettuccine pasta', 'fettuccine', 'fettucine', 'fettucine pasta'], 'fettuccine'],
   ];
 
   for (const [variants, canonical] of synonyms) {
@@ -1836,14 +1855,17 @@ function rebuildGroceryList() {
 
 // Average weights for common unitless ingredients (in oz)
 const AVG_WEIGHTS = {
-  'chicken breast': 8,    // ~8 oz per breast
-  'chicken thigh': 5,     // ~5 oz per thigh
-  'salmon': 6,            // ~6 oz per fillet
+  'chicken breast': 8,
+  'chicken thigh': 5,
+  'salmon': 6,
   'chicken': 8,
   'egg': 2,
   'lemon': 3,
+  'lemon juice': 1.5,  // ~1.5 oz juice per lemon
   'lime': 2,
+  'lime juice': 1,     // ~1 oz juice per lime
   'onion': 6,
+  'red onion': 6,
   'potato': 6,
   'sweet potato': 6,
   'bell pepper': 6,
@@ -1854,9 +1876,13 @@ const AVG_WEIGHTS = {
   'zucchini': 6,
   'carrot': 3,
   'mango': 10,
+  'corn': 5,       // per ear
+  'ground beef': 8,
+  'beef': 8,
 };
 
-// Smart merge that converts unitless counts to weight when mixed with weight units
+// Smart merge that converts unitless counts to weight when mixed with weight units,
+// or converts unitless counts to volume when mixed with volume units
 function smartMergeQuantities(parts, normKey) {
   const valid = parts.filter(p => p.trim());
   if (valid.length === 0) return '';
@@ -1866,8 +1892,9 @@ function smartMergeQuantities(parts, normKey) {
   const parsed = valid.map(parseQty).filter(Boolean);
   parsed.forEach(p => { p.normUnit = normalizeUnit(p.unit); });
 
-  // Check if we have a mix of weight units and unitless counts
+  // Check what types of units we have
   const hasWeight = parsed.some(p => getUnitGroup(p.normUnit) === 'weight');
+  const hasVolume = parsed.some(p => getUnitGroup(p.normUnit) === 'volume');
   const hasUnitless = parsed.some(p => !p.normUnit && p.amount > 0);
 
   // If mixed weight + unitless, convert unitless to weight using average
@@ -1880,6 +1907,32 @@ function smartMergeQuantities(parts, normKey) {
       return p;
     });
     return mergeQuantities(converted.map(p => p.normUnit ? `${p.amount} ${p.unit}` : p.raw));
+  }
+
+  // If mixed volume + unitless, just sum the unitless as a separate count
+  // but if the item has an average weight, convert to a useful unit
+  if ((hasVolume || hasWeight) && hasUnitless) {
+    // Separate unitless and unit-ed parts
+    const unitParts = valid.filter(v => {
+      const p = parseQty(v);
+      return p && p.unit;
+    });
+    const countParts = valid.filter(v => {
+      const p = parseQty(v);
+      return p && !p.unit && p.amount > 0;
+    });
+
+    const unitResult = unitParts.length > 0 ? mergeQuantities(unitParts) : '';
+    const countSum = countParts.reduce((sum, v) => {
+      const p = parseQty(v);
+      return sum + (p ? p.amount : 0);
+    }, 0);
+
+    if (countSum > 0 && unitResult) {
+      return `${unitResult} + ${formatAmount(countSum)}`;
+    }
+    if (unitResult) return unitResult;
+    return formatAmount(countSum);
   }
 
   return mergeQuantities(valid);
@@ -2355,27 +2408,46 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 3;  // bump this number when parser improves
+  const PARSER_VERSION = 4;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
-    if (currentVersion >= PARSER_VERSION) return;  // already migrated
+    if (currentVersion >= PARSER_VERSION) return;
 
     let changed = false;
     recipes.forEach(recipe => {
       if (!recipe.ingredients) return;
       recipe.ingredients = recipe.ingredients
         .map(ing => {
-          // Re-parse the name through the new cleanIngName
-          const cleaned = cleanIngName(ing.name);
-          // Re-categorize with cleaned name
-          const category = categorizeIngredient(cleaned || ing.name);
-          // Re-format qty through formatQtyString
-          const qty = ing.qty ? formatQtyString(ing.qty) : '';
-          return {
-            name: cleaned || ing.name,
-            qty: qty,
-            category: category
-          };
+          let name = ing.name || '';
+          let qty = ing.qty || '';
+
+          // Strip Optional prefixes that survived previous migrations
+          name = name.replace(/^(?:optional|for the|for)\s*(?:toppings?|ingredients?|garnish(?:es)?|topping|serving|the sauce|the salad|the dressing)?[:\s]*/i, '').trim();
+
+          // If name contains "Juice of/and zest of N item", re-parse it
+          const juiceMatch = name.match(/^(?:juice|zest|juice and zest|zest and juice)\s+of\s+(\d+)\s+(.+)$/i);
+          if (juiceMatch) {
+            qty = juiceMatch[1];
+            name = juiceMatch[2];
+          }
+
+          // If qty is empty but name starts with a number, try to re-parse the whole thing
+          if (!qty && name.match(/^\d/)) {
+            const reparsed = parseIngredientString(name);
+            name = reparsed.name;
+            qty = reparsed.qty;
+          }
+
+          // Run through cleanIngName
+          name = cleanIngName(name);
+
+          // Re-format qty
+          qty = qty ? formatQtyString(qty) : '';
+
+          // Re-categorize
+          const category = name ? categorizeIngredient(name) : (ing.category || 'pantry');
+
+          return { name, qty, category };
         })
         .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
       changed = true;
@@ -2383,7 +2455,6 @@ function migrateRecipes() {
 
     if (changed) {
       saveRecipes();
-      // Rebuild grocery list if any recipes are active
       if (recipes.some(r => r.active)) {
         rebuildGroceryList();
       }
