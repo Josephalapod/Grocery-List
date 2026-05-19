@@ -1881,15 +1881,15 @@ const AVG_WEIGHTS = {
   'beef': 8,
 };
 
-// Smart merge that converts unitless counts to weight when mixed with weight units,
-// or converts unitless counts to volume when mixed with volume units
+// Smart merge that converts unitless counts to weight when mixed with weight units
 function smartMergeQuantities(parts, normKey) {
-  const valid = parts.filter(p => p.trim());
-  if (valid.length === 0) return '';
-  if (valid.length === 1) return formatQtyString(valid[0]);
+  // Clean all parts first
+  const cleaned = parts.map(p => cleanQtyString(p)).filter(p => p);
+  if (cleaned.length === 0) return '';
+  if (cleaned.length === 1) return formatQtyString(cleaned[0]);
 
   // Parse all parts
-  const parsed = valid.map(parseQty).filter(Boolean);
+  const parsed = cleaned.map(parseQty).filter(Boolean);
   parsed.forEach(p => { p.normUnit = normalizeUnit(p.unit); });
 
   // Check what types of units we have
@@ -1897,45 +1897,30 @@ function smartMergeQuantities(parts, normKey) {
   const hasVolume = parsed.some(p => getUnitGroup(p.normUnit) === 'volume');
   const hasUnitless = parsed.some(p => !p.normUnit && p.amount > 0);
 
-  // If mixed weight + unitless, convert unitless to weight using average
+  // If mixed weight + unitless and we have an average weight, convert everything to weight
   if (hasWeight && hasUnitless && AVG_WEIGHTS[normKey]) {
     const avgOz = AVG_WEIGHTS[normKey];
-    const converted = parsed.map(p => {
+    const allAsWeight = parsed.map(p => {
       if (!p.normUnit && p.amount > 0) {
-        return { ...p, amount: p.amount * avgOz, normUnit: 'oz', unit: 'oz' };
+        return `${p.amount * avgOz} oz`;
       }
-      return p;
-    });
-    return mergeQuantities(converted.map(p => p.normUnit ? `${p.amount} ${p.unit}` : p.raw));
+      return p.normUnit ? `${p.amount} ${p.unit}` : '';
+    }).filter(Boolean);
+    return mergeQuantities(allAsWeight);
   }
 
-  // If mixed volume + unitless, just sum the unitless as a separate count
-  // but if the item has an average weight, convert to a useful unit
-  if ((hasVolume || hasWeight) && hasUnitless) {
-    // Separate unitless and unit-ed parts
-    const unitParts = valid.filter(v => {
-      const p = parseQty(v);
-      return p && p.unit;
-    });
-    const countParts = valid.filter(v => {
-      const p = parseQty(v);
-      return p && !p.unit && p.amount > 0;
-    });
-
-    const unitResult = unitParts.length > 0 ? mergeQuantities(unitParts) : '';
-    const countSum = countParts.reduce((sum, v) => {
-      const p = parseQty(v);
-      return sum + (p ? p.amount : 0);
-    }, 0);
-
-    if (countSum > 0 && unitResult) {
-      return `${unitResult} + ${formatAmount(countSum)}`;
+  // If only unitless counts, just sum them
+  if (!hasWeight && !hasVolume && hasUnitless) {
+    const total = parsed.reduce((sum, p) => sum + (p.normUnit ? 0 : p.amount), 0);
+    // Check if there are also unit-ed parts
+    const unitParts = parsed.filter(p => p.normUnit);
+    if (unitParts.length > 0) {
+      return mergeQuantities(cleaned);
     }
-    if (unitResult) return unitResult;
-    return formatAmount(countSum);
+    return total > 0 ? formatAmount(total) : '';
   }
 
-  return mergeQuantities(valid);
+  return mergeQuantities(cleaned);
 }
 
 // Unit conversion tables (everything converts to a base unit per group)
@@ -2099,27 +2084,115 @@ function mergeQuantities(parts) {
     results.push(`${formatAmount(displayAmount)} ${displayUnit}`);
   }
 
-  // Other units (cloves, cans, etc.)
-  Object.values(otherByUnit).forEach(g => {
-    const amt = formatAmount(g.amount);
-    results.push(g.unit ? `${amt} ${g.unit}` : `${amt}`);
+  // Other units — sum all unitless counts together
+  let unitlessTotal = 0;
+  const namedUnits = {};
+
+  Object.entries(otherByUnit).forEach(([key, g]) => {
+    if (key === '_none') {
+      unitlessTotal += g.amount;
+    } else {
+      if (!namedUnits[g.unit]) namedUnits[g.unit] = 0;
+      namedUnits[g.unit] += g.amount;
+    }
   });
 
-  results.push(...unparsed);
-  return results.join(' + ');
+  // If we have both named units and unitless, try to combine
+  // If there's already a volume or weight result, fold unitless into that or drop it
+  if (results.length > 0 && unitlessTotal > 0) {
+    // Already have a unit-based result; unitless counts are likely redundant
+    // Only add if no other result exists
+  } else if (unitlessTotal > 0) {
+    const namedKeys = Object.keys(namedUnits);
+    if (namedKeys.length > 0) {
+      // Prefer the named unit over bare count
+      namedKeys.forEach(u => {
+        results.push(`${formatAmount(namedUnits[u])} ${u}`);
+      });
+    } else {
+      results.push(formatAmount(unitlessTotal));
+    }
+  }
+
+  // Add any named non-volume/non-weight units that aren't already covered
+  if (unitlessTotal === 0) {
+    Object.values(namedUnits).forEach((amt, i) => {
+      const u = Object.keys(namedUnits)[i];
+      results.push(`${formatAmount(amt)} ${u}`);
+    });
+  }
+
+  // Return just the first result if multiple — prefer unit-based over unitless
+  if (results.length === 0) return '';
+  return results[0];
 }
 
 // Format a single qty string with normalized units
 function formatQtyString(str) {
+  str = cleanQtyString(str);
   const p = parseQty(str);
   if (!p) return str;
   const norm = normalizeUnit(p.unit);
-  if (!norm) return formatAmount(p.amount);
+  if (!norm) {
+    if (p.amount === 0) return '';
+    return formatAmount(p.amount);
+  }
   return `${formatAmount(p.amount)} ${norm}`;
 }
 
-function parseQty(str) {
+// Clean a qty string: strip prep words, descriptors, notes
+function cleanQtyString(str) {
+  if (!str) return '';
   str = str.trim();
+
+  // Handle "4 (6 oz each)" → "24 oz"
+  const eachMatch = str.match(/^(\d+)\s*\(\s*([\d.]+)\s*(oz|lb|g|kg)\s*each\s*\)/i);
+  if (eachMatch) {
+    const count = parseInt(eachMatch[1]);
+    const perUnit = parseFloat(eachMatch[2]);
+    const unit = eachMatch[3];
+    return `${count * perUnit} ${unit}`;
+  }
+
+  // Handle "4 (6-ounce) fillets" → "24 oz"
+  const parenSizeMatch = str.match(/^(\d+)\s*\(\s*([\d.]+)[- ]*(ounce|oz|pound|lb)\s*\)\s*/i);
+  if (parenSizeMatch) {
+    const count = parseInt(parenSizeMatch[1]);
+    const perUnit = parseFloat(parenSizeMatch[2]);
+    const unit = normalizeUnit(parenSizeMatch[3]);
+    return `${count * perUnit} ${unit}`;
+  }
+
+  // Remove parenthetical notes: "(about 2 lbs)" → keep the amount if useful
+  const aboutMatch = str.match(/\(\s*about\s+([\d./]+\s*(?:lb|lbs|oz|g|kg|cup|cups))\s*\)/i);
+  if (aboutMatch) {
+    // Use the parenthetical amount instead
+    str = aboutMatch[1];
+    return str;
+  }
+
+  // Strip all parenthetical content
+  str = str.replace(/\s*\(.*?\)\s*/g, ' ').trim();
+
+  // Remove prep/descriptor words after the unit
+  // Match: number + unit + junk  OR  number + junk
+  const prepJunk = /[,;]\s*.*$/;  // everything after comma/semicolon
+  str = str.replace(prepJunk, '').trim();
+
+  // Strip trailing descriptor words that aren't units
+  const trailingJunk = /\s+(to taste|divided|or more|or less|or to taste|plus more|as needed|for garnish|for serving|for topping|optional|approximately|about|roughly|packed|heaping|rounded|scant|generous|level|sifted|melted|softened|at room temperature|room temperature|cold|warm|hot|chilled|frozen|thawed|drained|rinsed|trimmed|peeled|minced|chopped|diced|sliced|thinly sliced|cubed|crushed|grated|shredded|julienned|cut into.*|torn|broken|crumbled|uncooked|cooked|fresh|dried|ground|large|medium|small|thin|thick|ripe|firm|boneless|skinless|each|total|approximately)$/i;
+
+  let prev = '';
+  while (prev !== str) {
+    prev = str;
+    str = str.replace(trailingJunk, '').trim();
+  }
+
+  return str;
+}
+
+function parseQty(str) {
+  str = cleanQtyString(str);
   if (!str) return null;
 
   // Handle unicode fractions: ½, ¼, ¾, ⅓, ⅔, ⅛, ⅜, ⅝, ⅞
@@ -2128,7 +2201,9 @@ function parseQty(str) {
     const uniMatch = str.match(new RegExp(`^(\\d+)?\\s*${sym}\\s*(.*)$`));
     if (uniMatch) {
       const whole = uniMatch[1] ? parseInt(uniMatch[1]) : 0;
-      const unit = (uniMatch[2] || '').trim();
+      let unit = (uniMatch[2] || '').trim();
+      // Only keep the unit if it's a real unit word
+      unit = extractUnit(unit);
       return { amount: whole + val, unit, raw: str };
     }
   }
@@ -2139,7 +2214,8 @@ function parseQty(str) {
     const whole = fracMatch[1] ? parseInt(fracMatch[1]) : 0;
     const num = parseInt(fracMatch[2]);
     const den = parseInt(fracMatch[3]);
-    const unit = (fracMatch[4] || '').trim();
+    let unit = (fracMatch[4] || '').trim();
+    unit = extractUnit(unit);
     return { amount: whole + num / den, unit, raw: str };
   }
 
@@ -2147,11 +2223,37 @@ function parseQty(str) {
   const numMatch = str.match(/^([\d.]+)\s*(.*)?$/);
   if (numMatch) {
     const amount = parseFloat(numMatch[1]);
-    const unit = (numMatch[2] || '').trim();
+    let unit = (numMatch[2] || '').trim();
+    unit = extractUnit(unit);
     return { amount, unit, raw: str };
   }
 
   return { amount: 0, unit: '', raw: str };
+}
+
+// Extract only a valid unit from the beginning of a string, ignore the rest
+function extractUnit(str) {
+  if (!str) return '';
+  str = str.trim().toLowerCase();
+
+  const unitPatterns = [
+    'tablespoons?', 'teaspoons?', 'tbsp', 'tbs', 'tb', 'tsp', 'ts',
+    'cups?', 'fl\\.?\\s*oz', 'fluid\\s+ounces?',
+    'pints?', 'pt', 'quarts?', 'qt', 'gallons?', 'gal',
+    'ounces?', 'oz', 'pounds?', 'lbs?', 'lb',
+    'grams?', 'g', 'kg', 'kilograms?',
+    'milliliters?', 'ml', 'liters?', 'l',
+    'cloves?', 'cans?', 'bunch(?:es)?',
+    'pinch(?:es)?', 'dash(?:es)?',
+    'sprigs?', 'slices?', 'pieces?', 'heads?', 'stalks?', 'sticks?',
+    'packages?', 'pkg', 'bags?', 'containers?', 'bottles?', 'jars?', 'boxes?',
+    'ears?', 'envelopes?',
+  ];
+
+  const pattern = new RegExp(`^(${unitPatterns.join('|')})\\.?(?:\\s|$)`, 'i');
+  const match = str.match(pattern);
+  if (match) return match[1];
+  return '';  // No valid unit found — return empty, not the junk text
 }
 
 function normalizeUnit(unit) {
@@ -2181,6 +2283,9 @@ function normalizeUnit(unit) {
     'piece': 'piece', 'pieces': 'piece',
     'head': 'head', 'heads': 'head',
     'stalk': 'stalk', 'stalks': 'stalk',
+    'ear': 'ear', 'ears': 'ear',
+    'envelope': 'envelope', 'envelopes': 'envelope',
+    'package': 'package', 'packages': 'package', 'pkg': 'package',
   };
   return aliases[unit] || unit;
 }
@@ -2408,7 +2513,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 4;  // bump this number when parser improves
+  const PARSER_VERSION = 5;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
