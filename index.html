@@ -332,6 +332,48 @@
     transform: scale(0.9);
   }
 
+  .item-recipes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 14px 8px 54px;
+    margin-top: -4px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .item-row:last-child + .item-recipes {
+    border-bottom: none;
+  }
+
+  .recipe-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    color: #5C6BC0;
+    background: #E8EAF6;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background 0.15s;
+    line-height: 1.4;
+  }
+
+  .recipe-tag:active {
+    background: #C5CAE9;
+  }
+
+  .item-row.checked + .item-recipes .recipe-tag {
+    color: var(--text-done);
+    background: #F0F0F0;
+  }
+
   /* Add item row */
   .add-row {
     display: flex;
@@ -1775,8 +1817,7 @@ function findMergeKey(mergedCat, normalizedName) {
 
 // Rebuild the grocery list from all active recipes, merging quantities for shared items
 function rebuildGroceryList() {
-  // First pass: collect ALL ingredients across all categories into a flat map by normalized name
-  const globalMerged = {};  // { normKey: { name, parts: [], categories: Set } }
+  const globalMerged = {};
 
   recipes.forEach(recipe => {
     if (!recipe.active || !recipe.ingredients) return;
@@ -1790,38 +1831,41 @@ function rebuildGroceryList() {
         if (ing.name.length < globalMerged[normKey].name.length) {
           globalMerged[normKey].name = ing.name;
         }
+        if (!globalMerged[normKey].recipeIds.has(recipe.id)) {
+          globalMerged[normKey].recipeIds.add(recipe.id);
+          globalMerged[normKey].recipes.push({ title: recipe.title, url: recipe.url, id: recipe.id });
+        }
       } else {
         globalMerged[normKey] = {
           name: ing.name,
           parts: [ing.qty || ''],
-          categories: new Set([ing.category || 'pantry'])
+          categories: new Set([ing.category || 'pantry']),
+          recipeIds: new Set([recipe.id]),
+          recipes: [{ title: recipe.title, url: recipe.url, id: recipe.id }]
         };
       }
     });
   });
 
-  // Second pass: assign each merged ingredient to one category (first one wins)
   const byCat = {};
   CATEGORIES.forEach(cat => { byCat[cat.id] = {}; });
 
   for (const [normKey, data] of Object.entries(globalMerged)) {
-    // Pick the best category — prefer the first one found
     const catPriority = ['produce', 'meat', 'dairy', 'bakery', 'pantry', 'frozen', 'beverages', 'snacks', 'household'];
     let bestCat = 'pantry';
     for (const cp of catPriority) {
       if (data.categories.has(cp)) { bestCat = cp; break; }
     }
 
-    // Smart quantity merging: convert unitless counts to weight for meats
     const combinedQty = smartMergeQuantities(data.parts, normKey);
 
     byCat[bestCat][normKey] = {
       name: data.name,
-      qty: combinedQty
+      qty: combinedQty,
+      usedBy: data.recipes
     };
   }
 
-  // Third pass: build state
   CATEGORIES.forEach(cat => {
     const oldItems = state[cat.id] || [];
     const newItems = [];
@@ -1836,11 +1880,11 @@ function rebuildGroceryList() {
         qty: m.qty,
         checked: existing ? existing.checked : false,
         id: existing ? existing.id : uid(),
-        source: 'recipe'
+        source: 'recipe',
+        usedBy: m.usedBy
       });
     });
 
-    // Keep manual items
     oldItems.forEach(item => {
       if (item.source !== 'recipe') {
         newItems.push(item);
@@ -2382,6 +2426,25 @@ function render() {
       };
 
       container.appendChild(row);
+
+      // Recipe tags - show which recipes use this item
+      if (item.usedBy && item.usedBy.length > 0) {
+        const tagsDiv = document.createElement('div');
+        tagsDiv.className = 'item-recipes';
+        item.usedBy.forEach(r => {
+          const tag = document.createElement('a');
+          tag.className = 'recipe-tag';
+          tag.href = r.url;
+          tag.target = '_blank';
+          tag.rel = 'noopener';
+          // Shorten title for display
+          const shortTitle = r.title.length > 20 ? r.title.substring(0, 20) + '…' : r.title;
+          tag.textContent = '📖 ' + shortTitle;
+          tag.onclick = (e) => e.stopPropagation();
+          tagsDiv.appendChild(tag);
+        });
+        container.appendChild(tagsDiv);
+      }
     });
 
     // Add item row
@@ -2513,7 +2576,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 5;  // bump this number when parser improves
+  const PARSER_VERSION = 6;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
