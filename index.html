@@ -1147,7 +1147,7 @@ function renderRecipes() {
             qty: parsed.qty,
             category: categorizeIngredient(parsed.name)
           };
-        });
+        }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
 
         addRecipeFromResult({
           title: recipeData.title || 'Untitled Recipe',
@@ -1216,21 +1216,25 @@ Use simple common ingredient names (e.g. "salmon fillets" not "4 6-oz center-cut
 
     function addRecipeFromResult(result, fullUrl) {
       const CATEGORY_IDS = CATEGORIES.map(c => c.id);
+      const filteredIngredients = (result.ingredients || [])
+        .map(ing => ({
+          name: cleanIngName(ing.name),
+          qty: ing.qty || '',
+          category: CATEGORY_IDS.includes(ing.category) ? ing.category : categorizeIngredient(ing.name)
+        }))
+        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+
       recipes.push({
         title: result.title || 'Untitled Recipe',
         url: fullUrl,
         id: uid(),
         active: true,
-        ingredients: (result.ingredients || []).map(ing => ({
-          name: ing.name,
-          qty: ing.qty || '',
-          category: CATEGORY_IDS.includes(ing.category) ? ing.category : categorizeIngredient(ing.name)
-        }))
+        ingredients: filteredIngredients
       });
       saveRecipes();
       rebuildGroceryList();
 
-      const addedCount = result.ingredients?.length || 0;
+      const addedCount = filteredIngredients.length;
       showStatus(`Added "${result.title}" with ${addedCount} ingredients!`, false);
       urlInput.value = '';
       addBtn.classList.remove('loading');
@@ -1490,11 +1494,29 @@ function parseIngredientString(raw) {
   // Normalize dashes in numbers: "1-1/2" → "1 1/2"
   raw = raw.replace(/(\d)-(\d)/, '$1 $2');
 
-  // Remove leading "Optional:" or "(optional)"
-  raw = raw.replace(/^optional:\s*/i, '').replace(/\(optional\)/gi, '').trim();
+  // Strip "Optional:", "Optional toppings:", "Optional ingredients:", etc.
+  raw = raw.replace(/^optional\s*(?:toppings|ingredients|garnish)?[:\s]*/i, '').trim();
 
-  // Remove notes in parentheses at the end: "butter (melted)" → "butter"
-  const cleanName = (n) => n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/,\s*.*$/, '').trim();
+  // Strip "(optional)" anywhere
+  raw = raw.replace(/\(optional\)/gi, '').trim();
+
+  // Remove ALL parentheses and their contents: "corn kernels (fresh or frozen)" → "corn kernels"
+  // Also handles stray closing parens: "boneless )" → "boneless"
+  raw = raw.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s*\)\s*/g, ' ').replace(/\s*\(\s*/g, ' ').trim();
+
+  // Handle "Juice and zest of 2 limes" → name: "limes", qty: "2"
+  const juiceZestMatch = raw.match(/^(?:juice|zest|juice and zest|zest and juice)\s+of\s+([\d\s/.]+)\s+(.+)$/i);
+  if (juiceZestMatch) {
+    return { name: cleanIngName(juiceZestMatch[2]), qty: juiceZestMatch[1].trim() };
+  }
+
+  // Handle "N to M items" pattern: "6 to 8 ears of corn" → name: "corn", qty: "6-8"
+  const rangeMatch = raw.match(/^([\d/.]+)\s+to\s+([\d/.]+)\s+(.+)$/i);
+  if (rangeMatch) {
+    const qty = `${rangeMatch[1]}-${rangeMatch[2]}`;
+    let name = rangeMatch[3].replace(/^ears?\s+of\s+/i, ''); // "ears of corn" → "corn"
+    return { name: cleanIngName(name), qty };
+  }
 
   // Number pattern: handles "2", "1/2", "1 1/2", ".5"
   const numPat = '(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\.?\\d*)';
@@ -1511,10 +1533,8 @@ function parseIngredientString(raw) {
     'pinch(?:es)?', 'dash(?:es)?',
     'sprigs?', 'slices?', 'pieces?', 'heads?', 'stalks?', 'sticks?',
     'packages?', 'pkg', 'bags?', 'containers?', 'bottles?', 'jars?', 'boxes?',
+    'ears?', 'envelopes?',
   ].join('|');
-
-  // Size/prep descriptors that should be stripped from the name
-  const sizeWords = /^(large|small|medium|med|thin|thick)\s+/i;
 
   // Pattern 1: number + unit + name  (e.g. "2 tablespoons olive oil")
   const p1 = new RegExp(`^(${numPat})\\s+(${unitWords})\\.?\\s+(.+)$`, 'i');
@@ -1522,8 +1542,7 @@ function parseIngredientString(raw) {
   if (m1) {
     const qty = m1[1].trim();
     const unit = normalizeUnit(m1[2].trim());
-    let name = cleanName(m1[3]);
-    name = name.replace(sizeWords, '');
+    let name = cleanIngName(m1[3]);
     return { name, qty: `${qty} ${unit}` };
   }
 
@@ -1532,25 +1551,82 @@ function parseIngredientString(raw) {
   const m2 = raw.match(p2);
   if (m2) {
     const qty = m2[1].trim();
-    let name = cleanName(m2[2]);
+    let name = m2[2];
     // Check if the next word is a unit we missed
     const unitCheck = new RegExp(`^(${unitWords})\\.?\\s+(.+)$`, 'i');
     const uc = name.match(unitCheck);
     if (uc) {
       const unit = normalizeUnit(uc[1].trim());
-      name = uc[2].replace(sizeWords, '');
-      name = cleanName(name);
+      name = cleanIngName(uc[2]);
       return { name, qty: `${qty} ${unit}` };
     }
-    // Strip size words from name
-    name = name.replace(sizeWords, '');
+    name = cleanIngName(name);
     return { name, qty };
   }
 
-  // Pattern 3: no number at all (e.g. "salt and pepper to taste", "Optional: shredded cheese")
-  let name = cleanName(raw);
-  name = name.replace(sizeWords, '');
-  return { name, qty: '' };
+  // Pattern 3: no number at all
+  return { name: cleanIngName(raw), qty: '' };
+}
+
+// Clean an ingredient name: strip prep words, size words, notes, simplify cuts
+function cleanIngName(n) {
+  // Remove notes after comma: "chicken, cut into cubes" → "chicken"
+  n = n.replace(/,\s*.*$/, '').trim();
+
+  // Remove remaining parentheses
+  n = n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/[()]/g, '').trim();
+
+  // Strip leading prep/size/freshness descriptors
+  // These get applied repeatedly to catch stacked modifiers: "fresh chopped flat-leaf parsley"
+  const stripWords = /^(fresh|freshly|dried|ground|minced|chopped|diced|sliced|crushed|grated|shredded|whole|large|small|medium|med|thin|thick|finely|coarsely|roughly|thinly|thickly|boneless|skinless|bone-in|skin-on|organic|raw|cooked|roasted|toasted|unsalted|salted|sweetened|unsweetened|extra-virgin|extra virgin|light|dark|low-sodium|low sodium|reduced-sodium|reduced sodium|all-purpose|all purpose|flat-leaf|flat leaf|ripe|firm|soft|warm|hot|cold|frozen|canned|packed|loosely|tightly|peeled|trimmed|seeded|deveined|pitted|cored|cubed|julienned|melted|softened|room temperature|divided|separated|beaten|whisked|sifted|drained|rinsed|soaked|smoked|crispy|crisp|tender|lean|thick-cut|thin-cut|head|heads)\s+/i;
+
+  let prev = '';
+  while (prev !== n) {
+    prev = n;
+    n = n.replace(stripWords, '').trim();
+  }
+
+  // Simplify meat cuts: "chicken breast halves" → "chicken breast"
+  n = n.replace(/\s+halves$/i, '');
+  n = n.replace(/\s+half$/i, '');
+  n = n.replace(/\s+filets?$/i, '');
+  n = n.replace(/\s+fillets?$/i, '');
+  n = n.replace(/\s+cutlets?$/i, '');
+
+  // "ears of corn" → "corn"
+  n = n.replace(/^ears?\s+of\s+/i, '');
+
+  // "of " prefix leftover
+  n = n.replace(/^of\s+/i, '');
+
+  // Clean up whitespace
+  n = n.replace(/\s+/g, ' ').trim();
+
+  // Filter out garbage entries (too short or just punctuation)
+  if (n.length < 2) return '';
+
+  return n;
+}
+
+// Items to exclude from the grocery list entirely
+function shouldExcludeIngredient(name) {
+  const n = name.toLowerCase().trim();
+  const excludes = [
+    /^water$/,
+    /^warm water$/,
+    /^hot water$/,
+    /^cold water$/,
+    /^ice water$/,
+    /^boiling water$/,
+    /^tap water$/,
+    /^cooking spray$/,
+    /^non-?stick spray$/,
+    /^nonstick spray$/,
+    /^salt and pepper$/,      // too generic, usually "to taste"
+    /^salt and pepper to taste$/,
+    /^$/,                      // empty
+  ];
+  return excludes.some(re => re.test(n));
 }
 
 // Categorize an ingredient name locally (no AI)
@@ -2185,6 +2261,49 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) hideClearModal();
 });
 
+// One-time migration: re-parse stored recipe ingredients through the new parser
+function migrateRecipes() {
+  const PARSER_VERSION = 2;  // bump this number when parser improves
+  try {
+    const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
+    if (currentVersion >= PARSER_VERSION) return;  // already migrated
+
+    let changed = false;
+    recipes.forEach(recipe => {
+      if (!recipe.ingredients) return;
+      recipe.ingredients = recipe.ingredients
+        .map(ing => {
+          // Re-parse the name through the new cleanIngName
+          const cleaned = cleanIngName(ing.name);
+          // Re-categorize with cleaned name
+          const category = categorizeIngredient(cleaned || ing.name);
+          // Re-format qty through formatQtyString
+          const qty = ing.qty ? formatQtyString(ing.qty) : '';
+          return {
+            name: cleaned || ing.name,
+            qty: qty,
+            category: category
+          };
+        })
+        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+      changed = true;
+    });
+
+    if (changed) {
+      saveRecipes();
+      // Rebuild grocery list if any recipes are active
+      if (recipes.some(r => r.active)) {
+        rebuildGroceryList();
+      }
+    }
+
+    localStorage.setItem('parserVersion', String(PARSER_VERSION));
+  } catch(e) {
+    console.error('Migration error:', e);
+  }
+}
+
+migrateRecipes();
 render();
 renderRecipes();
 
