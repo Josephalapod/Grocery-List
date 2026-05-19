@@ -1494,8 +1494,8 @@ function parseIngredientString(raw) {
   // Normalize dashes in numbers: "1-1/2" → "1 1/2"
   raw = raw.replace(/(\d)-(\d)/, '$1 $2');
 
-  // Strip "Optional:", "Optional toppings:", "Optional ingredients:", etc.
-  raw = raw.replace(/^optional\s*(?:toppings|ingredients|garnish)?[:\s]*/i, '').trim();
+  // Strip "Optional:", "Optional toppings:", "Optional ingredients:", "For the topping:", etc.
+  raw = raw.replace(/^(?:optional|for the|for)\s*(?:toppings?|ingredients?|garnish(?:es)?|topping|serving|the sauce|the salad|the dressing)?[:\s]*/i, '').trim();
 
   // Strip "(optional)" anywhere
   raw = raw.replace(/\(optional\)/gi, '').trim();
@@ -1578,7 +1578,7 @@ function cleanIngName(n) {
 
   // Strip leading prep/size/freshness descriptors
   // These get applied repeatedly to catch stacked modifiers: "fresh chopped flat-leaf parsley"
-  const stripWords = /^(fresh|freshly|dried|ground|minced|chopped|diced|sliced|crushed|grated|shredded|whole|large|small|medium|med|thin|thick|finely|coarsely|roughly|thinly|thickly|boneless|skinless|bone-in|skin-on|organic|raw|cooked|roasted|toasted|unsalted|salted|sweetened|unsweetened|extra-virgin|extra virgin|light|dark|low-sodium|low sodium|reduced-sodium|reduced sodium|all-purpose|all purpose|flat-leaf|flat leaf|ripe|firm|soft|warm|hot|cold|frozen|canned|packed|loosely|tightly|peeled|trimmed|seeded|deveined|pitted|cored|cubed|julienned|melted|softened|room temperature|divided|separated|beaten|whisked|sifted|drained|rinsed|soaked|smoked|crispy|crisp|tender|lean|thick-cut|thin-cut|head|heads)\s+/i;
+  const stripWords = /^(fresh|freshly|dried|ground|minced|chopped|diced|sliced|crushed|grated|shredded|whole|large|small|medium|med|thin|thick|finely|coarsely|roughly|thinly|thickly|boneless|skinless|bone-in|skin-on|organic|raw|cooked|roasted|toasted|unsalted|salted|sweetened|unsweetened|extra-virgin|extra virgin|light|dark|low-sodium|low sodium|reduced-sodium|reduced sodium|all-purpose|all purpose|flat-leaf|flat leaf|ripe|firm|soft|warm|hot|cold|frozen|canned|packed|loosely|tightly|peeled|trimmed|seeded|deveined|pitted|cored|cubed|julienned|melted|softened|room temperature|divided|separated|beaten|whisked|sifted|drained|rinsed|soaked|smoked|crispy|crisp|tender|lean|thick-cut|thin-cut|head|heads|broken|crumbled|squeezed|freshly squeezed|nacho-flavored|flavored|plain|sweet)\s+/i;
 
   let prev = '';
   while (prev !== n) {
@@ -1594,6 +1594,10 @@ function cleanIngName(n) {
   n = n.replace(/\s+cutlets?$/i, '');
 
   // "ears of corn" → "corn"
+  n = n.replace(/^ears?\s+of\s+/i, '');
+
+  // "to 8 ears of corn" → "corn" (leftover from partial parse)
+  n = n.replace(/^to\s+\d+\s+/i, '');
   n = n.replace(/^ears?\s+of\s+/i, '');
 
   // "of " prefix leftover
@@ -1676,11 +1680,29 @@ function normalizeIngredientName(name) {
     'extra-virgin ', 'extra virgin ', 'light ', 'dark ',
     'low-sodium ', 'low sodium ', 'reduced-sodium ', 'reduced sodium ',
     'all-purpose ', 'all purpose ',
+    'broken ', 'crumbled ', 'squeezed ', 'freshly squeezed ',
+    'nacho-flavored ', 'flavored ', 'plain ', 'sweet ',
+    'ripe ', 'firm ', 'soft ', 'warm ', 'hot ', 'cold ',
+    'packed ', 'loosely ', 'tightly ',
   ];
-  modifiers.forEach(mod => { n = n.replace(mod, ''); });
+  // Apply multiple passes
+  for (let i = 0; i < 3; i++) {
+    modifiers.forEach(mod => { n = n.replace(new RegExp('^' + mod.replace('-', '\\-'), 'i'), ''); });
+  }
+  n = n.trim();
 
   // Strip trailing descriptors in parens: "butter (unsalted)" -> "butter"
-  n = n.replace(/\s*\(.*?\)\s*/g, ' ');
+  n = n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/[()]/g, '').trim();
+
+  // Remove notes after comma
+  n = n.replace(/,\s*.*$/, '').trim();
+
+  // Simplify meat
+  n = n.replace(/\s+halves$/i, '');
+  n = n.replace(/\s+half$/i, '');
+  n = n.replace(/\s+filets?$/i, '');
+  n = n.replace(/\s+fillets?$/i, '');
+  n = n.replace(/\s+cutlets?$/i, '');
 
   // Normalize common ingredient synonyms/variants
   const synonyms = [
@@ -1692,8 +1714,8 @@ function normalizeIngredientName(name) {
     [['olive oil', 'evoo'], 'olive oil'],
     [['vegetable oil', 'canola oil', 'neutral oil'], 'vegetable oil'],
     [['soy sauce', 'tamari', 'shoyu'], 'soy sauce'],
-    [['lemon juice', 'juice of lemon', 'juice of a lemon'], 'lemon juice'],
-    [['lime juice', 'juice of lime', 'juice of a lime'], 'lime juice'],
+    [['lemon juice', 'juice of lemon', 'juice of a lemon', 'lemons juiced'], 'lemon juice'],
+    [['lime juice', 'juice of lime', 'juice of a lime', 'limes juiced', 'freshly squeezed lime juice'], 'lime juice'],
     [['parmesan cheese', 'parmigiano reggiano', 'parmigiano', 'parmesan'], 'parmesan'],
     [['heavy cream', 'heavy whipping cream', 'whipping cream'], 'heavy cream'],
     [['cilantro', 'fresh cilantro', 'coriander leaves'], 'cilantro'],
@@ -1703,6 +1725,11 @@ function normalizeIngredientName(name) {
     [['red pepper flakes', 'crushed red pepper', 'red chili flakes', 'chili flakes'], 'red pepper flakes'],
     [['chicken breast', 'chicken breasts'], 'chicken breast'],
     [['salmon fillet', 'salmon fillets', 'salmon'], 'salmon'],
+    [['taco seasoning', 'taco seasoning mix', 'envelope taco seasoning', 'envelope reduced-sodium taco seasoning', 'envelope reduced sodium taco seasoning', 'packet taco seasoning'], 'taco seasoning'],
+    [['tortilla chips', 'nacho-flavored tortilla chips', 'corn tortilla chips'], 'tortilla chips'],
+    [['corn', 'corn kernels', 'ears of corn', 'ear of corn', 'sweet corn'], 'corn'],
+    [['tomatoes', 'tomato', 'diced tomatoes'], 'tomatoes'],
+    [['onion', 'onions', 'yellow onion', 'yellow onions', 'white onion', 'white onions'], 'onion'],
   ];
 
   for (const [variants, canonical] of synonyms) {
@@ -1713,9 +1740,7 @@ function normalizeIngredientName(name) {
 
   // Remove trailing 's' for simple plurals (but not for words ending in 'ss' like 'glass')
   if (n.endsWith('s') && !n.endsWith('ss') && n.length > 3) {
-    const singular = n.slice(0, -1);
-    // Only depluralize if it's not already a known word we want to keep
-    n = singular;
+    n = n.slice(0, -1);
   }
 
   return n.replace(/\s+/g, ' ').trim();
@@ -1731,49 +1756,65 @@ function findMergeKey(mergedCat, normalizedName) {
 
 // Rebuild the grocery list from all active recipes, merging quantities for shared items
 function rebuildGroceryList() {
-  const merged = {};  // { catId: { normalizedKey: { name, qty, parts: [] } } }
-
-  CATEGORIES.forEach(cat => { merged[cat.id] = {}; });
+  // First pass: collect ALL ingredients across all categories into a flat map by normalized name
+  const globalMerged = {};  // { normKey: { name, parts: [], categories: Set } }
 
   recipes.forEach(recipe => {
     if (!recipe.active || !recipe.ingredients) return;
     recipe.ingredients.forEach(ing => {
-      const catId = ing.category || 'pantry';
       const normKey = normalizeIngredientName(ing.name);
-      if (!merged[catId]) merged[catId] = {};
+      if (!normKey) return;
 
-      const existingKey = findMergeKey(merged[catId], normKey);
-
-      if (existingKey) {
-        merged[catId][existingKey].parts.push(ing.qty || '');
-        // Keep the shorter/simpler name — the recipe has prep details
-        if (ing.name.length < merged[catId][existingKey].name.length) {
-          merged[catId][existingKey].name = ing.name;
+      if (globalMerged[normKey]) {
+        globalMerged[normKey].parts.push(ing.qty || '');
+        globalMerged[normKey].categories.add(ing.category || 'pantry');
+        if (ing.name.length < globalMerged[normKey].name.length) {
+          globalMerged[normKey].name = ing.name;
         }
       } else {
-        merged[catId][normKey] = {
+        globalMerged[normKey] = {
           name: ing.name,
-          parts: [ing.qty || '']
+          parts: [ing.qty || ''],
+          categories: new Set([ing.category || 'pantry'])
         };
       }
     });
   });
 
+  // Second pass: assign each merged ingredient to one category (first one wins)
+  const byCat = {};
+  CATEGORIES.forEach(cat => { byCat[cat.id] = {}; });
+
+  for (const [normKey, data] of Object.entries(globalMerged)) {
+    // Pick the best category — prefer the first one found
+    const catPriority = ['produce', 'meat', 'dairy', 'bakery', 'pantry', 'frozen', 'beverages', 'snacks', 'household'];
+    let bestCat = 'pantry';
+    for (const cp of catPriority) {
+      if (data.categories.has(cp)) { bestCat = cp; break; }
+    }
+
+    // Smart quantity merging: convert unitless counts to weight for meats
+    const combinedQty = smartMergeQuantities(data.parts, normKey);
+
+    byCat[bestCat][normKey] = {
+      name: data.name,
+      qty: combinedQty
+    };
+  }
+
+  // Third pass: build state
   CATEGORIES.forEach(cat => {
     const oldItems = state[cat.id] || [];
     const newItems = [];
 
-    // Add merged recipe items
-    Object.values(merged[cat.id] || {}).forEach(m => {
-      const combinedQty = mergeQuantities(m.parts);
-      // Check if there's an existing recipe item to preserve checked state
+    Object.values(byCat[cat.id] || {}).forEach(m => {
       const existingNorm = normalizeIngredientName(m.name);
       const existing = oldItems.find(item =>
         item.source === 'recipe' && normalizeIngredientName(item.name) === existingNorm
       );
       newItems.push({
         name: m.name,
-        qty: combinedQty,
+        qty: m.qty,
         checked: existing ? existing.checked : false,
         id: existing ? existing.id : uid(),
         source: 'recipe'
@@ -1791,6 +1832,57 @@ function rebuildGroceryList() {
   });
 
   saveState();
+}
+
+// Average weights for common unitless ingredients (in oz)
+const AVG_WEIGHTS = {
+  'chicken breast': 8,    // ~8 oz per breast
+  'chicken thigh': 5,     // ~5 oz per thigh
+  'salmon': 6,            // ~6 oz per fillet
+  'chicken': 8,
+  'egg': 2,
+  'lemon': 3,
+  'lime': 2,
+  'onion': 6,
+  'potato': 6,
+  'sweet potato': 6,
+  'bell pepper': 6,
+  'tomato': 5,
+  'avocado': 6,
+  'banana': 4,
+  'apple': 6,
+  'zucchini': 6,
+  'carrot': 3,
+  'mango': 10,
+};
+
+// Smart merge that converts unitless counts to weight when mixed with weight units
+function smartMergeQuantities(parts, normKey) {
+  const valid = parts.filter(p => p.trim());
+  if (valid.length === 0) return '';
+  if (valid.length === 1) return formatQtyString(valid[0]);
+
+  // Parse all parts
+  const parsed = valid.map(parseQty).filter(Boolean);
+  parsed.forEach(p => { p.normUnit = normalizeUnit(p.unit); });
+
+  // Check if we have a mix of weight units and unitless counts
+  const hasWeight = parsed.some(p => getUnitGroup(p.normUnit) === 'weight');
+  const hasUnitless = parsed.some(p => !p.normUnit && p.amount > 0);
+
+  // If mixed weight + unitless, convert unitless to weight using average
+  if (hasWeight && hasUnitless && AVG_WEIGHTS[normKey]) {
+    const avgOz = AVG_WEIGHTS[normKey];
+    const converted = parsed.map(p => {
+      if (!p.normUnit && p.amount > 0) {
+        return { ...p, amount: p.amount * avgOz, normUnit: 'oz', unit: 'oz' };
+      }
+      return p;
+    });
+    return mergeQuantities(converted.map(p => p.normUnit ? `${p.amount} ${p.unit}` : p.raw));
+  }
+
+  return mergeQuantities(valid);
 }
 
 // Unit conversion tables (everything converts to a base unit per group)
@@ -2263,7 +2355,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 2;  // bump this number when parser improves
+  const PARSER_VERSION = 3;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;  // already migrated
