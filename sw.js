@@ -1,4 +1,4 @@
-const CACHE_NAME = 'grocery-list-v7';
+const CACHE_NAME = 'grocery-list-v6';
 const ASSETS = [
   './',
   './index.html',
