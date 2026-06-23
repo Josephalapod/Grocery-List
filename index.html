@@ -999,7 +999,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.2.0';
+const APP_VERSION = 'v1.2.1';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1287,15 +1287,17 @@ function renderRecipes() {
       showStatus('Fetching recipe...', false);
 
       try {
-        // Try multiple CORS proxies (ordered by reliability)
-        // Jina Reader renders pages server-side and bypasses most bot-blocking
+        // Try multiple fetch methods (ordered by reliability)
+        // Jina Reader renders pages server-side and bypasses most bot-blocking.
+        // We request HTML from Jina so we can use the robust JSON-LD extractor.
         const proxies = [
-          { url: u => `https://r.jina.ai/${u}`, type: 'jina' },
+          { url: u => `https://r.jina.ai/${u}`, type: 'jina-html' },
           { url: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, type: 'html' },
           { url: u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, type: 'html' },
           { url: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, type: 'html' },
           { url: u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, type: 'json' },
           { url: u => `https://proxy.cors.sh/${u}`, type: 'html' },
+          { url: u => `https://r.jina.ai/${u}`, type: 'jina-md' },
         ];
 
         let html = null;
@@ -1303,17 +1305,27 @@ function renderRecipes() {
 
         for (const proxy of proxies) {
           try {
+            let headers = {};
+            if (proxy.type === 'jina-html') headers = { 'X-Return-Format': 'html' };
+            else if (proxy.type === 'jina-md') headers = { 'X-Return-Format': 'markdown' };
+
             const resp = await fetch(proxy.url(fullUrl), {
               signal: AbortSignal.timeout(15000),
-              headers: proxy.type === 'jina' ? { 'X-Return-Format': 'markdown' } : {}
+              headers
             });
             if (resp.ok) {
               let text = await resp.text();
               if (proxy.type === 'json') {
                 try { text = JSON.parse(text).contents || ''; } catch(e) {}
               }
-              if (proxy.type === 'jina') {
-                // Jina returns markdown; we'll parse ingredients from it directly
+
+              if (proxy.type === 'jina-html') {
+                // Jina HTML may contain JSON-LD or recipe markup — route through the HTML pipeline
+                if (text && text.length > 500 && (text.includes('recipeIngredient') || text.includes('<'))) {
+                  html = text;
+                  break;
+                }
+              } else if (proxy.type === 'jina-md') {
                 if (text && text.length > 300) {
                   jinaText = text;
                   break;
@@ -1326,14 +1338,14 @@ function renderRecipes() {
           } catch(e) { /* try next proxy */ }
         }
 
-        // If Jina gave us markdown, extract ingredients from it
-        if (jinaText) {
+        // If we only got Jina markdown (no HTML worked), parse it as a last resort
+        if (!html && jinaText) {
           const jinaResult = extractFromMarkdown(jinaText);
           if (jinaResult && jinaResult.ingredients.length > 0) {
             const categorized = jinaResult.ingredients.map(raw => {
               const parsed = parseIngredientString(raw);
               return { name: parsed.name, qty: parsed.qty, category: categorizeIngredient(parsed.name) };
-            }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+            }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name) && !isJustUnit(ing.name));
 
             if (categorized.length > 0) {
               addRecipeFromResult({ title: jinaResult.title || 'Recipe', ingredients: categorized }, fullUrl);
@@ -1399,7 +1411,7 @@ function renderRecipes() {
             qty: parsed.qty,
             category: categorizeIngredient(parsed.name)
           };
-        }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+        }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name) && !isJustUnit(ing.name));
 
         addRecipeFromResult({
           title: recipeData.title || 'Untitled Recipe',
@@ -1474,7 +1486,7 @@ Use simple common ingredient names (e.g. "salmon fillets" not "4 6-oz center-cut
           qty: ing.qty || '',
           category: CATEGORY_IDS.includes(ing.category) ? ing.category : categorizeIngredient(ing.name)
         }))
-        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name) && !isJustUnit(ing.name));
 
       recipes.push({
         title: result.title || 'Untitled Recipe',
@@ -1956,6 +1968,19 @@ function cleanIngName(n) {
 }
 
 // Items to exclude from the grocery list entirely
+// Returns true if the "name" is actually just a measurement unit word (junk from bad parsing)
+function isJustUnit(name) {
+  const n = name.toLowerCase().trim().replace(/s$/, '');  // singularize
+  const units = [
+    'teaspoon', 'tablespoon', 'tbsp', 'tsp', 'cup', 'ounce', 'oz', 'pound', 'lb',
+    'gram', 'g', 'kg', 'kilogram', 'milliliter', 'ml', 'liter', 'l',
+    'pint', 'quart', 'gallon', 'clove', 'can', 'bunch', 'pinch', 'dash',
+    'sprig', 'slice', 'piece', 'head', 'stalk', 'stick', 'package', 'bag',
+    'container', 'bottle', 'jar', 'box', 'ear', 'envelope', 'fl oz', 'fluid ounce',
+  ];
+  return units.includes(n);
+}
+
 function shouldExcludeIngredient(name) {
   const n = name.toLowerCase().trim();
   const excludes = [
@@ -2966,7 +2991,7 @@ function migrateRecipes() {
 
           return { name, qty, category };
         })
-        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name) && !isJustUnit(ing.name));
       changed = true;
     });
 
