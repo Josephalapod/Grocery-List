@@ -1146,7 +1146,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.4.2';
+const APP_VERSION = 'v1.4.3';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -2242,6 +2242,32 @@ function shouldExcludeIngredient(name) {
 function categorizeIngredient(name) {
   const n = name.toLowerCase().trim();
 
+  // HIGH PRIORITY pantry overrides — these collide with produce/meat keywords otherwise.
+  // "black pepper", "ground black pepper", "white pepper" → pantry (spice), not produce.
+  if (/\b(black|white|ground|cracked|whole)\s+pepper(corns?)?\b/.test(n) || /\bpeppercorns?\b/.test(n)) {
+    return 'pantry';
+  }
+  // "X powder/flakes/seasoning/salt/extract" where X is a produce/spice word → pantry
+  if (/\b(powder|powdered|flakes?|granules?|granulated|seasoning|extract)\b/.test(n) &&
+      /\b(onion|garlic|celery|chili|chile|chipotle|ginger|tomato|mushroom|herb|paprika|mustard|curry|chive|pepper)\b/.test(n)) {
+    return 'pantry';
+  }
+  // Any phrase containing "dried" + a herb/spice (any word order) → pantry
+  if (/\bdried\b/.test(n) &&
+      /\b(oregano|basil|thyme|rosemary|sage|parsley|cilantro|dill|mint|tarragon|marjoram|bay|chili|chile|pepper|mustard|ginger|herbs?|cumin|coriander)\b/.test(n)) {
+    return 'pantry';
+  }
+  // Broth / stock / bouillon → pantry even though they contain meat words
+  if (/\b(broth|stock|bouillon|consomm)\b/.test(n)) {
+    return 'pantry';
+  }
+  // Roasts and other beef/pork cuts that don't contain an explicit meat keyword
+  if (/\b(chuck|brisket|sirloin|tenderloin|round|rump|flank|skirt|ribeye|rib-eye|loin)\b.*\broast\b/.test(n) ||
+      /\b(roast)\b.*\b(beef|pork|chuck|round)\b/.test(n) ||
+      /\bchuck\b/.test(n)) {
+    return 'meat';
+  }
+
   const rules = [
     // Meat & Seafood
     [/\b(chicken|beef|pork|steak|lamb|turkey|duck|bacon|sausage|ham|prosciutto|salami|pepperoni|veal|brisket|ribs?|salmon|tuna|shrimp|prawns?|crab|lobster|fish|cod|tilapia|halibut|scallops?|mussels?|clams?|oysters?|anchovies?|sardines?|calamari|squid|mahi|swordfish|trout|sea bass|ground meat|meatballs?|hot dogs?)\b/, 'meat'],
@@ -2250,7 +2276,7 @@ function categorizeIngredient(name) {
     // Produce
     [/\b(lettuce|spinach|kale|arugula|cabbage|broccoli|cauliflower|carrot|celery|onion|garlic|ginger|tomato|pepper|bell pepper|jalapeño|jalapeno|chili|chile|potato|sweet potato|yam|corn|peas?|beans?|zucchini|squash|cucumber|avocado|mushroom|eggplant|artichoke|asparagus|beet|radish|turnip|leek|shallot|scallion|green onion|spring onion|lemon|lime|orange|apple|banana|berries?|strawberr|blueberr|raspberr|blackberr|grape|mango|pineapple|peach|pear|plum|melon|watermelon|coconut|cranberr|cherry|fig|kiwi|papaya|pomegranate|grapefruit|herb|basil|cilantro|parsley|mint|dill|rosemary|thyme|sage|oregano|chives?|tarragon|bay lea|lemongrass|fennel|endive|chard|bok choy|sprouts?|watercress|rhubarb|plantain|jicama|tomatillo)\b/, 'produce'],
     // Bakery
-    [/\b(bread|tortilla|pita|naan|baguette|croissant|roll|bun|bagel|muffin|english muffin|flatbread|ciabatta|sourdough|wrap|crouton|breadcrumb|panko)\b/, 'bakery'],
+    [/\b(bread|tortillas?|pita|naan|baguettes?|croissants?|rolls?|buns?|bagels?|muffins?|english muffins?|flatbreads?|ciabatta|sourdough|wraps?|croutons?|breadcrumbs?|panko|hoagies?|sub rolls?|brioche|focaccia|dinner rolls?)\b/, 'bakery'],
     // Frozen
     [/\b(frozen|ice cream|popsicle|freezer|frost)\b/, 'frozen'],
     // Beverages
@@ -3295,7 +3321,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 7;  // bump this number when parser improves
+  const PARSER_VERSION = 8;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
