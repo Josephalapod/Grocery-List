@@ -999,7 +999,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.2.1';
+const APP_VERSION = 'v1.3.0';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1015,6 +1015,53 @@ const CATEGORIES = [
 
 let state = loadState();
 let collapsed = {};
+
+// --- Durable storage layer (IndexedDB + localStorage mirror) ---
+// IndexedDB survives "clear cached files" and is much harder to lose than localStorage.
+// We write to both so reads are instant (localStorage) but data is durable (IndexedDB).
+let idb = null;
+
+function openIDB() {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open('groceryAppDB', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('kv')) {
+          db.createObjectStore('kv');
+        }
+      };
+      req.onsuccess = (e) => { idb = e.target.result; resolve(idb); };
+      req.onerror = () => resolve(null);
+    } catch(e) { resolve(null); }
+  });
+}
+
+function idbSet(key, value) {
+  if (!idb) return;
+  try {
+    const tx = idb.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(value, key);
+  } catch(e) {}
+}
+
+function idbGet(key) {
+  return new Promise((resolve) => {
+    if (!idb) { resolve(null); return; }
+    try {
+      const tx = idb.transaction('kv', 'readonly');
+      const req = tx.objectStore('kv').get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    } catch(e) { resolve(null); }
+  });
+}
+
+// Durable write: mirror to both localStorage (fast) and IndexedDB (durable)
+function durableSet(key, jsonString) {
+  try { localStorage.setItem(key, jsonString); } catch(e) {}
+  idbSet(key, jsonString);
+}
 
 function loadState() {
   try {
@@ -1033,7 +1080,7 @@ function initState() {
 }
 
 function saveState() {
-  try { localStorage.setItem('groceryList', JSON.stringify(state)); } catch(e) {}
+  durableSet('groceryList', JSON.stringify(state));
 }
 
 function uid() {
@@ -1053,7 +1100,7 @@ function loadRecipes() {
 }
 
 function saveRecipes() {
-  try { localStorage.setItem('groceryRecipes', JSON.stringify(recipes)); } catch(e) {}
+  durableSet('groceryRecipes', JSON.stringify(recipes));
 }
 
 function getDomain(url) {
@@ -3008,23 +3055,112 @@ function migrateRecipes() {
   }
 }
 
-migrateRecipes();
+// Startup — recover from IndexedDB if localStorage was cleared, then render
+async function startup() {
+  await openIDB();
 
-// Display app version
-const versionEl = document.getElementById('appVersion');
-if (versionEl) versionEl.textContent = APP_VERSION;
+  // Ask the browser to make storage persistent (never auto-evict our data)
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const already = await navigator.storage.persisted();
+      if (!already) await navigator.storage.persist();
+    }
+  } catch(e) {}
 
-// Always rebuild if there are active recipes, to populate usedBy links
-if (recipes.some(r => r.active)) {
-  rebuildGroceryList();
+  // Recovery: if localStorage is empty but IndexedDB has data, restore it
+  try {
+    const lsRecipes = localStorage.getItem('groceryRecipes');
+    const lsState = localStorage.getItem('groceryList');
+
+    if (!lsRecipes || lsRecipes === '[]') {
+      const idbRecipes = await idbGet('groceryRecipes');
+      if (idbRecipes) {
+        const parsed = JSON.parse(idbRecipes);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          recipes = parsed;
+          localStorage.setItem('groceryRecipes', idbRecipes);
+        }
+      }
+    }
+
+    if (!lsState) {
+      const idbState = await idbGet('groceryList');
+      if (idbState) {
+        state = JSON.parse(idbState);
+        localStorage.setItem('groceryList', idbState);
+      }
+    }
+  } catch(e) {}
+
+  // Ensure current data is mirrored to IndexedDB
+  idbSet('groceryRecipes', JSON.stringify(recipes));
+  idbSet('groceryList', JSON.stringify(state));
+
+  migrateRecipes();
+
+  // Display app version
+  const versionEl = document.getElementById('appVersion');
+  if (versionEl) versionEl.textContent = APP_VERSION;
+
+  // Always rebuild if there are active recipes, to populate usedBy links
+  if (recipes.some(r => r.active)) {
+    rebuildGroceryList();
+  }
+
+  render();
+  renderRecipes();
 }
 
-render();
-renderRecipes();
+startup();
 
-// Register service worker for PWA
+// Register service worker for PWA + handle update notifications
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // Check for updates periodically
+    setInterval(() => reg.update(), 60 * 1000);
+
+    // When a new service worker is waiting, show the update banner
+    function notifyUpdate() {
+      if (reg.waiting) showUpdateBanner(reg);
+    }
+    if (reg.waiting) notifyUpdate();
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (newWorker) {
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner(reg);
+          }
+        });
+      }
+    });
+  }).catch(() => {});
+
+  // Reload once the new worker takes control
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+}
+
+function showUpdateBanner(reg) {
+  if (document.getElementById('updateBanner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'updateBanner';
+  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:300;background:linear-gradient(135deg,#2D6A2E,#1B4B1C);color:#fff;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 -2px 16px rgba(0,0,0,0.2);font-family:inherit;';
+  banner.innerHTML = '<span style="font-size:14px;font-weight:500;">A new version is available</span>';
+  const btn = document.createElement('button');
+  btn.textContent = 'Update';
+  btn.style.cssText = 'background:#fff;color:#2D6A2E;border:none;border-radius:10px;padding:8px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;';
+  btn.onclick = () => {
+    if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    btn.textContent = 'Updating…';
+    btn.disabled = true;
+  };
+  banner.appendChild(btn);
+  document.body.appendChild(banner);
 }
 </script>
 </body>
