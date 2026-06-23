@@ -999,7 +999,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.3.0';
+const APP_VERSION = 'v1.3.1';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1972,14 +1972,19 @@ function parseIngredientString(raw) {
 
 // Clean an ingredient name: strip prep words, size words, notes, simplify cuts
 function cleanIngName(n) {
-  // Remove notes after comma: "chicken, cut into cubes" → "chicken"
-  n = n.replace(/,\s*.*$/, '').trim();
-
-  // Remove remaining parentheses
+  // Remove parentheses first
   n = n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/[()]/g, '').trim();
 
-  // Strip leading prep/size/freshness descriptors
-  // These get applied repeatedly to catch stacked modifiers: "fresh chopped flat-leaf parsley"
+  // Only remove text after a comma if that text is a prep instruction,
+  // NOT if it continues the ingredient name (e.g. "boneless, skinless chicken breasts").
+  // Prep clauses start with participles/phrases like "diced", "cut into", "to taste", etc.
+  const prepClause = /,\s*(cut |diced|chopped|sliced|minced|crushed|grated|shredded|melted|softened|divided|separated|drained|rinsed|trimmed|peeled|seeded|deveined|pitted|cored|cubed|julienned|beaten|whisked|sifted|packed|to taste|for |plus |or |at room|room temp|thawed|warmed|cooled|halved|quartered|crumbled|torn|pressed|squeezed|patted|rinsed|well |finely|coarsely|roughly|thinly|thickly|optional|as needed|if |about ).*$/i;
+  n = n.replace(prepClause, '').trim();
+
+  // Normalize commas between descriptor words: "boneless, skinless" → "boneless skinless"
+  n = n.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Strip leading prep/size/freshness descriptors (repeated to catch stacked modifiers)
   const stripWords = /^(fresh|freshly|dried|ground|minced|chopped|diced|sliced|crushed|grated|shredded|whole|large|small|medium|med|thin|thick|finely|coarsely|roughly|thinly|thickly|boneless|skinless|bone-in|skin-on|organic|raw|cooked|roasted|toasted|unsalted|salted|sweetened|unsweetened|extra-virgin|extra virgin|light|dark|low-sodium|low sodium|reduced-sodium|reduced sodium|all-purpose|all purpose|flat-leaf|flat leaf|ripe|firm|soft|warm|hot|cold|frozen|canned|packed|loosely|tightly|peeled|trimmed|seeded|deveined|pitted|cored|cubed|julienned|melted|softened|room temperature|divided|separated|beaten|whisked|sifted|drained|rinsed|soaked|smoked|crispy|crisp|tender|lean|thick-cut|thin-cut|head|heads|broken|crumbled|squeezed|freshly squeezed|nacho-flavored|flavored|plain|sweet)\s+/i;
 
   let prev = '';
@@ -1997,20 +2002,12 @@ function cleanIngName(n) {
 
   // "ears of corn" → "corn"
   n = n.replace(/^ears?\s+of\s+/i, '');
-
-  // "to 8 ears of corn" → "corn" (leftover from partial parse)
   n = n.replace(/^to\s+\d+\s+/i, '');
   n = n.replace(/^ears?\s+of\s+/i, '');
-
-  // "of " prefix leftover
   n = n.replace(/^of\s+/i, '');
 
-  // Clean up whitespace
   n = n.replace(/\s+/g, ' ').trim();
-
-  // Filter out garbage entries (too short or just punctuation)
   if (n.length < 2) return '';
-
   return n;
 }
 
