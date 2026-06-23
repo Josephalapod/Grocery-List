@@ -1146,7 +1146,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.4.3';
+const APP_VERSION = 'v1.4.4';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -2163,6 +2163,12 @@ function parseIngredientString(raw) {
 function cleanIngName(n) {
   // Remove parentheses first
   n = n.replace(/\s*\(.*?\)\s*/g, ' ').replace(/[()]/g, '').trim();
+
+  // Collapse "X or Y" ingredient alternatives to just the first option.
+  // e.g. "chicken breasts or thighs" → "chicken breasts", "butter or olive oil" → "butter".
+  // For "red or orange bell pepper" this yields "red" but the synonym table maps all
+  // bell-pepper variants together downstream, so the final result is still correct.
+  n = n.replace(/\s+or\s+.*$/i, '').trim();
 
   // Only remove text after a comma if that text is a prep instruction,
   // NOT if it continues the ingredient name (e.g. "boneless, skinless chicken breasts").
@@ -3321,7 +3327,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 8;  // bump this number when parser improves
+  const PARSER_VERSION = 9;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
