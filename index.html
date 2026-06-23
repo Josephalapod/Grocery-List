@@ -979,7 +979,7 @@
   <div class="progress-bar-track">
     <div class="progress-bar-fill" id="progressFill"></div>
   </div>
-  <div class="progress-text" id="progressText">0 of 0 items</div>
+  <div class="progress-text"><span id="progressText">0 of 0 items</span><span id="appVersion" style="float: right; opacity: 0.5; font-size: 10px;"></span></div>
 </div>
 
 <div id="recipesSection"></div>
@@ -999,6 +999,8 @@
 </div>
 
 <script>
+const APP_VERSION = 'v1.2.0';
+
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
   { id: 'dairy', name: 'Dairy & Eggs', color: '#2979C9', defaults: ['Milk', 'Eggs', 'Butter', 'Shredded Cheese'] },
@@ -1285,23 +1287,59 @@ function renderRecipes() {
       showStatus('Fetching recipe...', false);
 
       try {
-        // Try multiple CORS proxies
+        // Try multiple CORS proxies (ordered by reliability)
+        // Jina Reader renders pages server-side and bypasses most bot-blocking
         const proxies = [
-          url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-          url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-          url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+          { url: u => `https://r.jina.ai/${u}`, type: 'jina' },
+          { url: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, type: 'html' },
+          { url: u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, type: 'html' },
+          { url: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, type: 'html' },
+          { url: u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, type: 'json' },
+          { url: u => `https://proxy.cors.sh/${u}`, type: 'html' },
         ];
 
         let html = null;
-        for (const makeProxy of proxies) {
+        let jinaText = null;
+
+        for (const proxy of proxies) {
           try {
-            const resp = await fetch(makeProxy(fullUrl), { signal: AbortSignal.timeout(10000) });
+            const resp = await fetch(proxy.url(fullUrl), {
+              signal: AbortSignal.timeout(15000),
+              headers: proxy.type === 'jina' ? { 'X-Return-Format': 'markdown' } : {}
+            });
             if (resp.ok) {
-              html = await resp.text();
-              if (html && html.length > 500) break;
-              html = null;
+              let text = await resp.text();
+              if (proxy.type === 'json') {
+                try { text = JSON.parse(text).contents || ''; } catch(e) {}
+              }
+              if (proxy.type === 'jina') {
+                // Jina returns markdown; we'll parse ingredients from it directly
+                if (text && text.length > 300) {
+                  jinaText = text;
+                  break;
+                }
+              } else if (text && text.length > 500 && text.includes('<')) {
+                html = text;
+                break;
+              }
             }
           } catch(e) { /* try next proxy */ }
+        }
+
+        // If Jina gave us markdown, extract ingredients from it
+        if (jinaText) {
+          const jinaResult = extractFromMarkdown(jinaText);
+          if (jinaResult && jinaResult.ingredients.length > 0) {
+            const categorized = jinaResult.ingredients.map(raw => {
+              const parsed = parseIngredientString(raw);
+              return { name: parsed.name, qty: parsed.qty, category: categorizeIngredient(parsed.name) };
+            }).filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name));
+
+            if (categorized.length > 0) {
+              addRecipeFromResult({ title: jinaResult.title || 'Recipe', ingredients: categorized }, fullUrl);
+              return;
+            }
+          }
         }
 
         if (!html) {
@@ -1625,22 +1663,72 @@ function findRecipeInJsonLd(data) {
   if (typeof data !== 'object') return null;
 
   const type = data['@type'];
-  const isRecipe = type === 'Recipe' || (Array.isArray(type) && type.includes('Recipe'));
-  if (isRecipe) {
+  const isRecipe = type === 'Recipe' ||
+    (Array.isArray(type) && type.includes('Recipe')) ||
+    (typeof type === 'string' && type.toLowerCase() === 'recipe');
+
+  if (isRecipe && data.recipeIngredient) {
+    // recipeIngredient can be array of strings or array of objects
+    let ingredients = data.recipeIngredient;
+    if (Array.isArray(ingredients)) {
+      ingredients = ingredients.map(ing => {
+        if (typeof ing === 'string') return ing;
+        if (ing && typeof ing === 'object') return ing.text || ing.name || '';
+        return '';
+      }).filter(Boolean);
+    }
     return {
-      title: data.name || '',
-      ingredients: data.recipeIngredient || []
+      title: (typeof data.name === 'string' ? data.name : '') || '',
+      ingredients: ingredients
     };
   }
-  if (data['@graph']) return findRecipeInJsonLd(data['@graph']);
+
+  // Check @graph first (most common nesting)
+  if (data['@graph']) {
+    const r = findRecipeInJsonLd(data['@graph']);
+    if (r) return r;
+  }
+
   // Check nested values
   for (const val of Object.values(data)) {
-    if (typeof val === 'object') {
+    if (val && typeof val === 'object') {
       const r = findRecipeInJsonLd(val);
       if (r) return r;
     }
   }
   return null;
+}
+
+// Extract recipe from Jina Reader markdown output
+function extractFromMarkdown(md) {
+  if (!md) return null;
+
+  let title = '';
+  const titleMatch = md.match(/^#\s+(.+)$/m);
+  if (titleMatch) title = titleMatch[1].trim();
+
+  // Find the Ingredients section, capture until the next heading
+  const ingSectionMatch = md.match(/#{2,4}\s*Ingredients\s*\n([\s\S]*?)(?=\n#{1,4}\s|$)/i);
+  if (!ingSectionMatch) return null;
+
+  const ingredientBlock = ingSectionMatch[1];
+  const ingredients = [];
+  const lines = ingredientBlock.split('\n');
+  for (let line of lines) {
+    line = line.trim();
+    const itemMatch = line.match(/^[-*]\s+(.+)$/);
+    if (itemMatch) {
+      let text = itemMatch[1].trim();
+      text = text.replace(/\s{2,}/g, ' ');  // collapse multiple spaces
+      text = text.replace(/\*\*/g, '');       // strip bold markers
+      text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');  // strip markdown links
+      if (text.length > 1 && text.length < 200 && !text.match(/^(for the|for )\b/i)) {
+        ingredients.push(text);
+      }
+    }
+  }
+
+  return ingredients.length > 0 ? { title, ingredients } : null;
 }
 
 // Fallback: extract from common HTML recipe markup
@@ -1649,12 +1737,22 @@ function extractFromHtml(doc) {
   const selectors = [
     '.wprm-recipe-ingredient',
     '.tasty-recipe-ingredients li',
+    '.tasty-recipes-ingredients li',
     '.recipe-ingredients li',
     '.ingredient-list li',
+    '.ingredients-list li',
     '.ingredients li',
     '[itemprop="recipeIngredient"]',
+    '[itemprop="ingredients"]',
     '.recipe__ingredient',
     '.o-Ingredients__a-Ingredient',
+    '.mv-create-ingredients li',
+    '.recipe-card-ingredients li',
+    '.wpurp-recipe-ingredient',
+    '.ingredient',
+    'li.ingredient',
+    '.recipe-ingred_txt',
+    '.structured-ingredients__list-item',
   ];
 
   let ingredients = [];
@@ -1714,9 +1812,40 @@ function parseIngredientString(raw) {
   // Strip "(optional)" anywhere
   raw = raw.replace(/\(optional\)/gi, '').trim();
 
-  // Remove ALL parentheses and their contents: "corn kernels (fresh or frozen)" → "corn kernels"
-  // Also handles stray closing parens: "boneless )" → "boneless"
+  // Before stripping parens, try to extract a useful weight/measure from them
+  // e.g. "2 chicken breasts (1 1/2 to 2 pounds total)" → prefer "2 lb"
+  // e.g. "sun-dried tomatoes (2 1/2 ounces)" → "2 1/2 oz"
+  let parenWeight = '';
+  const parenWeightMatch = raw.match(/\(([^)]*?(\d[\d\s/.]*)\s*(pounds?|lbs?|lb|ounces?|oz|grams?|g|kg)[^)]*)\)/i);
+  if (parenWeightMatch) {
+    // Extract the LAST number before the unit (handles "1 1/2 to 2 pounds" → 2)
+    const inner = parenWeightMatch[1];
+    const rangeInParen = inner.match(/([\d\s/.]+)\s+to\s+([\d\s/.]+)\s*(pounds?|lbs?|lb|ounces?|oz|grams?|g|kg)/i);
+    if (rangeInParen) {
+      parenWeight = `${rangeInParen[2].trim()} ${normalizeUnit(rangeInParen[3])}`;
+    } else {
+      const singleInParen = inner.match(/([\d\s/.]+)\s*(pounds?|lbs?|lb|ounces?|oz|grams?|g|kg)/i);
+      if (singleInParen) {
+        parenWeight = `${singleInParen[1].trim()} ${normalizeUnit(singleInParen[2])}`;
+      }
+    }
+  }
+
+  // Remove ALL parentheses and their contents
   raw = raw.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s*\)\s*/g, ' ').replace(/\s*\(\s*/g, ' ').trim();
+
+  // If we found a weight in parens and the main part is just "N item(s)", use the weight
+  if (parenWeight) {
+    const countOnly = raw.match(/^(\d+)\s+(.+)$/);
+    if (countOnly) {
+      const name = cleanIngName(countOnly[2]);
+      // Only use paren weight if the main qty has no unit of its own
+      const mainHasUnit = extractUnit(countOnly[2]);
+      if (!mainHasUnit && name) {
+        return { name, qty: parenWeight };
+      }
+    }
+  }
 
   // Handle "Juice and zest of 2 limes" → name: "limes", qty: "2"
   const juiceZestMatch = raw.match(/^(?:juice|zest|juice and zest|zest and juice)\s+of\s+([\d\s/.]+)\s+(.+)$/i);
@@ -2855,6 +2984,10 @@ function migrateRecipes() {
 }
 
 migrateRecipes();
+
+// Display app version
+const versionEl = document.getElementById('appVersion');
+if (versionEl) versionEl.textContent = APP_VERSION;
 
 // Always rebuild if there are active recipes, to populate usedBy links
 if (recipes.some(r => r.active)) {
