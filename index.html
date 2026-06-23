@@ -37,6 +37,17 @@
     --check-size: 26px;
   }
 
+  body.dark {
+    --bg: #15161A;
+    --card: #1E2025;
+    --text: #ECECEC;
+    --text-muted: #8A8D94;
+    --text-done: #5A5D64;
+    --border: #2C2F36;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+    --shadow-hover: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
   body {
@@ -962,6 +973,125 @@
     font-size: 13px;
     font-style: italic;
   }
+  /* Dark mode overrides for elements with hardcoded light colors */
+  body.dark .checkmark { background: var(--card); border-color: #44474E; }
+  body.dark .item-row.checked { background: #191B1F; }
+  body.dark .item-qty,
+  body.dark .add-qty,
+  body.dark .recipe-add-input,
+  body.dark .bulk-textarea,
+  body.dark .manual-ing-name,
+  body.dark .manual-ing-qty,
+  body.dark .manual-ing-cat { background: #26282E; color: var(--text); border-color: #3A3D44; }
+  body.dark .item-qty:focus,
+  body.dark .add-qty:focus,
+  body.dark .recipe-add-input:focus,
+  body.dark .bulk-textarea:focus { background: #2E3037; border-color: #5A5D64; }
+  body.dark .item-row.checked .item-qty { background: #1A1C20; border-color: #2C2F36; }
+  body.dark .add-input { color: var(--text); }
+  body.dark .recipe-card:active,
+  body.dark .add-row:active,
+  body.dark .modal-btns .btn-cancel:active { background: #26282E; }
+  body.dark .modal { background: var(--card); }
+  body.dark .btn-cancel { background: #26282E; color: var(--text); }
+  body.dark .recipe-tag { border-color: #3A3D44; color: var(--text-muted); }
+  body.dark .recipe-tag:active { background: #26282E; color: var(--text); }
+  body.dark .sub-header { background: #26282E; }
+
+  /* Settings menu */
+  .settings-menu {
+    position: fixed;
+    top: 70px;
+    right: 12px;
+    z-index: 250;
+    background: var(--card);
+    border-radius: 14px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    min-width: 210px;
+    display: none;
+  }
+
+  .settings-menu.open { display: block; }
+
+  .settings-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+
+  .settings-item:last-child { border-bottom: none; }
+  .settings-item:active { background: var(--bg); }
+
+  .settings-item .toggle {
+    width: 40px;
+    height: 24px;
+    border-radius: 12px;
+    background: #CCC;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+
+  .settings-item .toggle.on { background: #43A047; }
+
+  .settings-item .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s;
+  }
+
+  .settings-item .toggle.on::after { transform: translateX(16px); }
+
+  .settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 240;
+    display: none;
+  }
+  .settings-overlay.open { display: block; }
+
+  /* Category reorder buttons */
+  .cat-reorder {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-right: 8px;
+  }
+
+  .cat-move {
+    width: 22px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.2);
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 10px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+  }
+
+  .cat-move:active { background: rgba(255,255,255,0.4); }
+  .cat-move:disabled { opacity: 0.25; cursor: default; }
+
 </style>
 </head>
 <body>
@@ -972,6 +1102,23 @@
     <button class="header-btn" onclick="toggleCollapseAll()" title="Collapse/expand all">▤</button>
     <button class="header-btn" onclick="uncheckAll()" title="Uncheck all">↩</button>
     <button class="header-btn" onclick="showClearModal()" title="Clear all">🗑</button>
+    <button class="header-btn" onclick="toggleSettings()" title="Settings">⚙</button>
+  </div>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay" onclick="toggleSettings()"></div>
+<div class="settings-menu" id="settingsMenu">
+  <div class="settings-item" onclick="toggleHideChecked()">
+    <span>Hide checked items</span>
+    <span class="toggle" id="hideCheckedToggle"></span>
+  </div>
+  <div class="settings-item" onclick="toggleDarkMode()">
+    <span>Dark mode</span>
+    <span class="toggle" id="darkModeToggle"></span>
+  </div>
+  <div class="settings-item" onclick="checkForUpdates()">
+    <span>Check for updates</span>
+    <span id="updateCheckStatus" style="font-size:11px;color:var(--text-muted);"></span>
   </div>
 </div>
 
@@ -999,7 +1146,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.3.2';
+const APP_VERSION = 'v1.4.0';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1015,6 +1162,48 @@ const CATEGORIES = [
 
 let state = loadState();
 let collapsed = {};
+
+// --- Settings (persisted in localStorage) ---
+let settings = loadSettings();
+
+// Apply dark mode ASAP to avoid a flash of light theme
+if (settings.darkMode) document.body.classList.add('dark');
+
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem('grocerySettings');
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return { hideChecked: false, darkMode: false, categoryOrder: null };
+}
+
+function saveSettings() {
+  try { localStorage.setItem('grocerySettings', JSON.stringify(settings)); } catch(e) {}
+}
+
+// Returns categories in the user's custom order (falls back to default order)
+function orderedCategories() {
+  if (!settings.categoryOrder || !Array.isArray(settings.categoryOrder)) return CATEGORIES.slice();
+  const byId = {};
+  CATEGORIES.forEach(c => { byId[c.id] = c; });
+  const ordered = [];
+  settings.categoryOrder.forEach(id => { if (byId[id]) { ordered.push(byId[id]); delete byId[id]; } });
+  // Append any categories not in the saved order (e.g. if categories were added later)
+  CATEGORIES.forEach(c => { if (byId[c.id]) ordered.push(c); });
+  return ordered;
+}
+
+function moveCategory(catId, direction) {
+  const order = orderedCategories().map(c => c.id);
+  const idx = order.indexOf(catId);
+  if (idx === -1) return;
+  const newIdx = idx + direction;
+  if (newIdx < 0 || newIdx >= order.length) return;
+  [order[idx], order[newIdx]] = [order[newIdx], order[idx]];
+  settings.categoryOrder = order;
+  saveSettings();
+  render();
+}
 
 // --- Durable storage layer (IndexedDB + localStorage mirror) ---
 // IndexedDB survives "clear cached files" and is much harder to lose than localStorage.
@@ -2708,9 +2897,12 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
-  CATEGORIES.forEach(cat => {
-    const items = state[cat.id] || [];
-    const checkedCount = items.filter(i => i.checked).length;
+  const cats = orderedCategories();
+  cats.forEach((cat, catPos) => {
+    const allItems = state[cat.id] || [];
+    // Hide checked items if the setting is on
+    const items = settings.hideChecked ? allItems.filter(i => !i.checked) : allItems;
+    const checkedCount = allItems.filter(i => i.checked).length;
     const isCollapsed = collapsed[cat.id];
 
     const section = document.createElement('div');
@@ -2720,13 +2912,40 @@ function render() {
     const header = document.createElement('div');
     header.className = 'cat-header' + (isCollapsed ? ' collapsed' : '');
     header.style.background = `linear-gradient(135deg, ${cat.color}, ${adjustColor(cat.color, -20)})`;
-    header.innerHTML = `
-      <h2>${cat.name}</h2>
-      <div class="cat-meta">
-        <span class="cat-count">${items.length > 0 ? checkedCount + '/' + items.length : ''}</span>
-        <span class="cat-chevron">▾</span>
-      </div>
+
+    // Reorder buttons
+    const reorder = document.createElement('div');
+    reorder.className = 'cat-reorder';
+    const upBtn = document.createElement('button');
+    upBtn.className = 'cat-move';
+    upBtn.innerHTML = '▲';
+    upBtn.disabled = catPos === 0;
+    upBtn.onclick = (e) => { e.stopPropagation(); moveCategory(cat.id, -1); };
+    const downBtn = document.createElement('button');
+    downBtn.className = 'cat-move';
+    downBtn.innerHTML = '▼';
+    downBtn.disabled = catPos === cats.length - 1;
+    downBtn.onclick = (e) => { e.stopPropagation(); moveCategory(cat.id, 1); };
+    reorder.appendChild(upBtn);
+    reorder.appendChild(downBtn);
+
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display:flex;align-items:center;flex:1;';
+    headerLeft.appendChild(reorder);
+    const h2 = document.createElement('h2');
+    h2.textContent = cat.name;
+    headerLeft.appendChild(h2);
+
+    const meta = document.createElement('div');
+    meta.className = 'cat-meta';
+    meta.innerHTML = `
+      <span class="cat-count">${allItems.length > 0 ? checkedCount + '/' + allItems.length : ''}</span>
+      <span class="cat-chevron">▾</span>
     `;
+
+    header.appendChild(headerLeft);
+    header.appendChild(meta);
+
     header.onclick = () => {
       collapsed[cat.id] = !collapsed[cat.id];
       render();
@@ -2737,7 +2956,8 @@ function render() {
     const container = document.createElement('div');
     container.className = 'cat-items' + (isCollapsed ? ' hidden' : '');
 
-    items.forEach((item, idx) => {
+    items.forEach((item) => {
+      const idx = allItems.indexOf(item);  // real index in the full array
       const row = document.createElement('div');
       row.className = 'item-row' + (item.checked ? ' checked' : '') + (item.usedBy && item.usedBy.length > 0 ? ' has-tags' : '');
 
@@ -2952,6 +3172,64 @@ function toggleCollapseAll() {
   renderRecipes();
 }
 
+// --- Settings menu ---
+function toggleSettings() {
+  const menu = document.getElementById('settingsMenu');
+  const overlay = document.getElementById('settingsOverlay');
+  const isOpen = menu.classList.contains('open');
+  if (isOpen) {
+    menu.classList.remove('open');
+    overlay.classList.remove('open');
+  } else {
+    menu.classList.add('open');
+    overlay.classList.add('open');
+    updateSettingsUI();
+  }
+}
+
+function updateSettingsUI() {
+  document.getElementById('hideCheckedToggle').classList.toggle('on', settings.hideChecked);
+  document.getElementById('darkModeToggle').classList.toggle('on', settings.darkMode);
+}
+
+function toggleHideChecked() {
+  settings.hideChecked = !settings.hideChecked;
+  saveSettings();
+  updateSettingsUI();
+  render();
+}
+
+function toggleDarkMode() {
+  settings.darkMode = !settings.darkMode;
+  saveSettings();
+  document.body.classList.toggle('dark', settings.darkMode);
+  updateSettingsUI();
+}
+
+function checkForUpdates() {
+  const statusEl = document.getElementById('updateCheckStatus');
+  statusEl.textContent = 'Checking…';
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg) { statusEl.textContent = 'N/A'; return; }
+      reg.update().then(() => {
+        setTimeout(() => {
+          if (reg.waiting || reg.installing) {
+            statusEl.textContent = 'Update found!';
+            if (reg.waiting) showUpdateBanner(reg);
+          } else {
+            statusEl.textContent = 'Up to date';
+            setTimeout(() => { statusEl.textContent = ''; }, 2500);
+          }
+        }, 1200);
+      }).catch(() => { statusEl.textContent = 'Error'; });
+    });
+  } else {
+    statusEl.textContent = 'N/A';
+  }
+}
+
+
 function showClearModal() {
   document.getElementById('clearModal').classList.add('active');
 }
@@ -3055,6 +3333,9 @@ function migrateRecipes() {
 // Startup — recover from IndexedDB if localStorage was cleared, then render
 async function startup() {
   await openIDB();
+
+  // Apply dark mode immediately to avoid a flash
+  if (settings.darkMode) document.body.classList.add('dark');
 
   // Ask the browser to make storage persistent (never auto-evict our data)
   try {
