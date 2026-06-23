@@ -1108,9 +1108,9 @@
 
 <div class="settings-overlay" id="settingsOverlay" onclick="toggleSettings()"></div>
 <div class="settings-menu" id="settingsMenu">
-  <div class="settings-item" onclick="toggleHideChecked()">
-    <span>Hide checked items</span>
-    <span class="toggle" id="hideCheckedToggle"></span>
+  <div class="settings-item" onclick="toggleSinkChecked()">
+    <span>Move checked to bottom</span>
+    <span class="toggle" id="sinkCheckedToggle"></span>
   </div>
   <div class="settings-item" onclick="toggleDarkMode()">
     <span>Dark mode</span>
@@ -1146,7 +1146,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.4.0';
+const APP_VERSION = 'v1.4.1';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1174,7 +1174,7 @@ function loadSettings() {
     const saved = localStorage.getItem('grocerySettings');
     if (saved) return JSON.parse(saved);
   } catch(e) {}
-  return { hideChecked: false, darkMode: false, categoryOrder: null };
+  return { sinkChecked: false, darkMode: false, categoryOrder: null };
 }
 
 function saveSettings() {
@@ -2900,8 +2900,11 @@ function render() {
   const cats = orderedCategories();
   cats.forEach((cat, catPos) => {
     const allItems = state[cat.id] || [];
-    // Hide checked items if the setting is on
-    const items = settings.hideChecked ? allItems.filter(i => !i.checked) : allItems;
+    // Sink checked items to the bottom (stable sort) if the setting is on
+    let items = allItems;
+    if (settings.sinkChecked) {
+      items = allItems.slice().sort((a, b) => (a.checked === b.checked) ? 0 : (a.checked ? 1 : -1));
+    }
     const checkedCount = allItems.filter(i => i.checked).length;
     const isCollapsed = collapsed[cat.id];
 
@@ -3188,12 +3191,12 @@ function toggleSettings() {
 }
 
 function updateSettingsUI() {
-  document.getElementById('hideCheckedToggle').classList.toggle('on', settings.hideChecked);
+  document.getElementById('sinkCheckedToggle').classList.toggle('on', settings.sinkChecked);
   document.getElementById('darkModeToggle').classList.toggle('on', settings.darkMode);
 }
 
-function toggleHideChecked() {
-  settings.hideChecked = !settings.hideChecked;
+function toggleSinkChecked() {
+  settings.sinkChecked = !settings.sinkChecked;
   saveSettings();
   updateSettingsUI();
   render();
