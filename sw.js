@@ -1,4 +1,4 @@
-const CACHE_NAME = 'grocery-list-v13';
+const CACHE_NAME = 'grocery-list-v14';
 const ASSETS = [
   './',
   './index.html',
@@ -15,7 +15,14 @@ self.addEventListener('install', (event) => {
       return cache.addAll(ASSETS);
     })
   );
-  self.skipWaiting();
+  // Don't auto-skip — wait for user to tap "Update" so they aren't interrupted mid-task
+});
+
+// Listen for the skip-waiting message from the page (user tapped "Update")
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // Activate: clean old caches
