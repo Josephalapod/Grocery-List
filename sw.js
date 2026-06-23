@@ -1,4 +1,4 @@
-const CACHE_NAME = 'grocery-list-v10';
+const CACHE_NAME = 'grocery-list-v12';
 const ASSETS = [
   './',
   './index.html',
@@ -36,9 +36,12 @@ self.addEventListener('fetch', (event) => {
 
   // Network-only for API calls and CORS proxies (recipe fetching)
   if (url.includes('api.anthropic.com') ||
+      url.includes('r.jina.ai') ||
       url.includes('allorigins.win') ||
       url.includes('corsproxy.io') ||
-      url.includes('codetabs.com')) {
+      url.includes('codetabs.com') ||
+      url.includes('proxy.cors.sh') ||
+      url.includes('thingproxy.freeboard.io')) {
     event.respondWith(fetch(event.request));
     return;
   }
