@@ -1109,7 +1109,7 @@
 <div class="settings-overlay" id="settingsOverlay" onclick="toggleSettings()"></div>
 <div class="settings-menu" id="settingsMenu">
   <div class="settings-item" onclick="toggleSinkChecked()">
-    <span>Move checked to bottom</span>
+    <span>Move checked to "In Cart"</span>
     <span class="toggle" id="sinkCheckedToggle"></span>
   </div>
   <div class="settings-item" onclick="toggleDarkMode()">
@@ -1146,7 +1146,7 @@
 </div>
 
 <script>
-const APP_VERSION = 'v1.4.1';
+const APP_VERSION = 'v1.4.2';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -2893,17 +2893,115 @@ function normalizeUnit(unit) {
   return aliases[unit] || unit;
 }
 
+// Build a single item row (checkbox, name, qty, delete, recipe tags) for a given category
+function buildItemRow(item, cat, container) {
+  const row = document.createElement('div');
+  row.className = 'item-row' + (item.checked ? ' checked' : '') + (item.usedBy && item.usedBy.length > 0 ? ' has-tags' : '');
+
+  // Checkbox
+  const label = document.createElement('label');
+  label.className = 'checkbox-wrap';
+  label.style.setProperty('--cat-color', cat.color);
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = item.checked;
+  const checkmark = document.createElement('div');
+  checkmark.className = 'checkmark';
+  checkmark.innerHTML = '<svg viewBox="0 0 16 16"><polyline points="3.5 8 6.5 11.5 12.5 4.5"/></svg>';
+  label.appendChild(cb);
+  label.appendChild(checkmark);
+  row.appendChild(label);
+
+  // Item name
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'item-name';
+  nameSpan.textContent = item.name;
+  row.appendChild(nameSpan);
+
+  // Qty input
+  const qtyInput = document.createElement('input');
+  qtyInput.className = 'item-qty';
+  qtyInput.type = 'text';
+  qtyInput.inputMode = 'text';
+  qtyInput.placeholder = 'qty';
+  qtyInput.value = item.qty;
+  row.appendChild(qtyInput);
+
+  // Delete button
+  const delBtn = document.createElement('button');
+  delBtn.className = 'item-delete';
+  delBtn.setAttribute('aria-label', 'Delete');
+  delBtn.textContent = '×';
+  row.appendChild(delBtn);
+
+  cb.onchange = (e) => {
+    item.checked = e.target.checked;
+    saveState();
+    render();
+  };
+  qtyInput.onchange = (e) => {
+    item.qty = e.target.value;
+    saveState();
+  };
+  delBtn.onclick = () => {
+    const arr = state[cat.id];
+    const i = arr.indexOf(item);
+    if (i !== -1) arr.splice(i, 1);
+    saveState();
+    render();
+  };
+
+  container.appendChild(row);
+
+  // Recipe tags
+  if (item.usedBy && item.usedBy.length > 0) {
+    const tagsDiv = document.createElement('div');
+    tagsDiv.className = 'item-recipes';
+    const summary = document.createElement('p');
+    summary.className = 'recipe-summary';
+    const count = item.usedBy.length;
+    summary.textContent = `Used in ${count} recipe${count > 1 ? 's' : ''} ▸`;
+    tagsDiv.appendChild(summary);
+    const expanded = document.createElement('div');
+    expanded.className = 'recipe-tags-expanded';
+    const tagsWrap = document.createElement('div');
+    tagsWrap.className = 'recipe-tags-wrap';
+    item.usedBy.forEach(r => {
+      const tag = document.createElement('a');
+      tag.className = 'recipe-tag';
+      tag.href = r.url;
+      tag.target = '_blank';
+      tag.rel = 'noopener';
+      tag.textContent = r.title;
+      tag.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); window.open(r.url, '_blank'); });
+      tagsWrap.appendChild(tag);
+    });
+    expanded.appendChild(tagsWrap);
+    const collapseLink = document.createElement('p');
+    collapseLink.className = 'recipe-collapse';
+    collapseLink.textContent = '▴ collapse';
+    expanded.appendChild(collapseLink);
+    tagsDiv.appendChild(expanded);
+    summary.onclick = () => { summary.style.display = 'none'; expanded.classList.add('open'); };
+    collapseLink.onclick = () => { expanded.classList.remove('open'); summary.style.display = ''; };
+    container.appendChild(tagsDiv);
+  }
+}
+
 function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
   const cats = orderedCategories();
+  const checkedBucket = [];  // collect all checked items for the bottom section
+
   cats.forEach((cat, catPos) => {
     const allItems = state[cat.id] || [];
-    // Sink checked items to the bottom (stable sort) if the setting is on
+    // When the setting is on, checked items move to a "Checked" section at the bottom
     let items = allItems;
     if (settings.sinkChecked) {
-      items = allItems.slice().sort((a, b) => (a.checked === b.checked) ? 0 : (a.checked ? 1 : -1));
+      items = allItems.filter(i => !i.checked);
+      allItems.forEach(i => { if (i.checked) checkedBucket.push({ item: i, cat }); });
     }
     const checkedCount = allItems.filter(i => i.checked).length;
     const isCollapsed = collapsed[cat.id];
@@ -2960,121 +3058,7 @@ function render() {
     container.className = 'cat-items' + (isCollapsed ? ' hidden' : '');
 
     items.forEach((item) => {
-      const idx = allItems.indexOf(item);  // real index in the full array
-      const row = document.createElement('div');
-      row.className = 'item-row' + (item.checked ? ' checked' : '') + (item.usedBy && item.usedBy.length > 0 ? ' has-tags' : '');
-
-      // Checkbox
-      const label = document.createElement('label');
-      label.className = 'checkbox-wrap';
-      label.style.setProperty('--cat-color', cat.color);
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = item.checked;
-      const checkmark = document.createElement('div');
-      checkmark.className = 'checkmark';
-      checkmark.innerHTML = '<svg viewBox="0 0 16 16"><polyline points="3.5 8 6.5 11.5 12.5 4.5"/></svg>';
-      label.appendChild(cb);
-      label.appendChild(checkmark);
-      row.appendChild(label);
-
-      // Item name
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'item-name';
-      nameSpan.textContent = item.name;
-      row.appendChild(nameSpan);
-
-      // Qty input
-      const qtyInput = document.createElement('input');
-      qtyInput.className = 'item-qty';
-      qtyInput.type = 'text';
-      qtyInput.inputMode = 'text';
-      qtyInput.placeholder = 'qty';
-      qtyInput.value = item.qty;
-      row.appendChild(qtyInput);
-
-      // Delete button
-      const delBtn = document.createElement('button');
-      delBtn.className = 'item-delete';
-      delBtn.setAttribute('aria-label', 'Delete');
-      delBtn.textContent = '×';
-      row.appendChild(delBtn);
-
-      // Event listeners
-      cb.onchange = (e) => {
-        item.checked = e.target.checked;
-        saveState();
-        render();
-      };
-
-      qtyInput.onchange = (e) => {
-        item.qty = e.target.value;
-        saveState();
-      };
-
-      delBtn.onclick = () => {
-        state[cat.id].splice(idx, 1);
-        saveState();
-        render();
-      };
-
-      container.appendChild(row);
-
-      // Recipe tags - expandable "Used in N recipes" line
-      if (item.usedBy && item.usedBy.length > 0) {
-        const tagsDiv = document.createElement('div');
-        tagsDiv.className = 'item-recipes';
-
-        // Collapsed summary
-        const summary = document.createElement('p');
-        summary.className = 'recipe-summary';
-        const count = item.usedBy.length;
-        summary.textContent = `Used in ${count} recipe${count > 1 ? 's' : ''} ▸`;
-        tagsDiv.appendChild(summary);
-
-        // Expanded container
-        const expanded = document.createElement('div');
-        expanded.className = 'recipe-tags-expanded';
-
-        const tagsWrap = document.createElement('div');
-        tagsWrap.className = 'recipe-tags-wrap';
-
-        item.usedBy.forEach(r => {
-          const tag = document.createElement('a');
-          tag.className = 'recipe-tag';
-          tag.href = r.url;
-          tag.target = '_blank';
-          tag.rel = 'noopener';
-          tag.textContent = r.title;
-          tag.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            window.open(r.url, '_blank');
-          });
-          tagsWrap.appendChild(tag);
-        });
-        expanded.appendChild(tagsWrap);
-
-        // Collapse link
-        const collapseLink = document.createElement('p');
-        collapseLink.className = 'recipe-collapse';
-        collapseLink.textContent = '▴ collapse';
-        expanded.appendChild(collapseLink);
-
-        tagsDiv.appendChild(expanded);
-
-        // Toggle expand/collapse
-        summary.onclick = () => {
-          summary.style.display = 'none';
-          expanded.classList.add('open');
-        };
-        collapseLink.onclick = () => {
-          expanded.classList.remove('open');
-          summary.style.display = '';
-        };
-
-        container.appendChild(tagsDiv);
-      }
+      buildItemRow(item, cat, container);
     });
 
     // Add item row
@@ -3135,6 +3119,42 @@ function render() {
     section.appendChild(container);
     app.appendChild(section);
   });
+
+  // "Checked" section at the very bottom — collects all checked items across categories
+  if (settings.sinkChecked && checkedBucket.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'category';
+
+    const isCollapsed = collapsed['__checked__'];
+    const header = document.createElement('div');
+    header.className = 'cat-header checked-header' + (isCollapsed ? ' collapsed' : '');
+    header.style.background = 'linear-gradient(135deg, #8A8D94, #6E7178)';
+
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display:flex;align-items:center;flex:1;';
+    const h2 = document.createElement('h2');
+    h2.textContent = '✓ In Cart';
+    headerLeft.appendChild(h2);
+
+    const meta = document.createElement('div');
+    meta.className = 'cat-meta';
+    meta.innerHTML = `<span class="cat-count">${checkedBucket.length}</span><span class="cat-chevron">▾</span>`;
+
+    header.appendChild(headerLeft);
+    header.appendChild(meta);
+    header.onclick = () => { collapsed['__checked__'] = !collapsed['__checked__']; render(); };
+    section.appendChild(header);
+
+    const container = document.createElement('div');
+    container.className = 'cat-items' + (isCollapsed ? ' hidden' : '');
+
+    checkedBucket.forEach(entry => {
+      buildItemRow(entry.item, entry.cat, container);
+    });
+
+    section.appendChild(container);
+    app.appendChild(section);
+  }
 
   updateProgress();
 }
