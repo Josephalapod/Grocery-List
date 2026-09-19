@@ -3101,4 +3101,462 @@ function render() {
     // Reorder buttons
     const reorder = document.createElement('div');
     reorder.className = 'cat-reorder';
-    const upBtn = document.createElemen
+    const upBtn = document.createElement('button');
+    upBtn.className = 'cat-move';
+    upBtn.innerHTML = '▲';
+    upBtn.disabled = catPos === 0;
+    upBtn.onclick = (e) => { e.stopPropagation(); moveCategory(cat.id, -1); };
+    const downBtn = document.createElement('button');
+    downBtn.className = 'cat-move';
+    downBtn.innerHTML = '▼';
+    downBtn.disabled = catPos === cats.length - 1;
+    downBtn.onclick = (e) => { e.stopPropagation(); moveCategory(cat.id, 1); };
+    reorder.appendChild(upBtn);
+    reorder.appendChild(downBtn);
+
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display:flex;align-items:center;flex:1;';
+    headerLeft.appendChild(reorder);
+    const h2 = document.createElement('h2');
+    h2.textContent = cat.name;
+    headerLeft.appendChild(h2);
+
+    const meta = document.createElement('div');
+    meta.className = 'cat-meta';
+    meta.innerHTML = `
+      <span class="cat-count">${allItems.length > 0 ? checkedCount + '/' + allItems.length : ''}</span>
+      <span class="cat-chevron">▾</span>
+    `;
+
+    header.appendChild(headerLeft);
+    header.appendChild(meta);
+
+    header.onclick = () => {
+      collapsed[cat.id] = !collapsed[cat.id];
+      render();
+    };
+    section.appendChild(header);
+
+    // Items container
+    const container = document.createElement('div');
+    container.className = 'cat-items' + (isCollapsed ? ' hidden' : '');
+
+    items.forEach((item) => {
+      buildItemRow(item, cat, container);
+    });
+
+    // Add item row
+    const addRow = document.createElement('div');
+    addRow.className = 'add-row';
+
+    const addIcon = document.createElement('div');
+    addIcon.className = 'add-icon';
+    addIcon.textContent = '+';
+    addRow.appendChild(addIcon);
+
+    const addInput = document.createElement('input');
+    addInput.className = 'add-input';
+    addInput.type = 'text';
+    addInput.placeholder = 'Add item...';
+    addInput.setAttribute('enterkeyhint', 'next');
+    addRow.appendChild(addInput);
+
+    const addQty = document.createElement('input');
+    addQty.className = 'add-qty';
+    addQty.type = 'text';
+    addQty.inputMode = 'text';
+    addQty.placeholder = 'qty';
+    addQty.setAttribute('enterkeyhint', 'done');
+    addRow.appendChild(addQty);
+
+    function submitAdd() {
+      if (addInput.value.trim()) {
+        state[cat.id].push({ name: addInput.value.trim(), qty: addQty.value.trim(), checked: false, id: uid(), source: 'manual' });
+        saveState();
+        render();
+        setTimeout(() => {
+          const cats = document.querySelectorAll('.category');
+          const catIdx = CATEGORIES.findIndex(c => c.id === cat.id);
+          if (cats[catIdx]) {
+            const inp = cats[catIdx].querySelector('.add-input');
+            if (inp) inp.focus();
+          }
+        }, 50);
+      }
+    }
+
+    addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addQty.focus();
+      }
+    });
+
+    addQty.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitAdd();
+      }
+    });
+
+    container.appendChild(addRow);
+    section.appendChild(container);
+    app.appendChild(section);
+  });
+
+  // "Checked" section at the very bottom — collects all checked items across categories
+  if (settings.sinkChecked && checkedBucket.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'category';
+
+    const isCollapsed = collapsed['__checked__'];
+    const header = document.createElement('div');
+    header.className = 'cat-header checked-header' + (isCollapsed ? ' collapsed' : '');
+    header.style.background = 'linear-gradient(135deg, #8A8D94, #6E7178)';
+
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display:flex;align-items:center;flex:1;';
+    const h2 = document.createElement('h2');
+    h2.textContent = '✓ In Cart';
+    headerLeft.appendChild(h2);
+
+    const meta = document.createElement('div');
+    meta.className = 'cat-meta';
+    meta.innerHTML = `<span class="cat-count">${checkedBucket.length}</span><span class="cat-chevron">▾</span>`;
+
+    header.appendChild(headerLeft);
+    header.appendChild(meta);
+    header.onclick = () => { collapsed['__checked__'] = !collapsed['__checked__']; render(); };
+    section.appendChild(header);
+
+    const container = document.createElement('div');
+    container.className = 'cat-items' + (isCollapsed ? ' hidden' : '');
+
+    checkedBucket.forEach(entry => {
+      buildItemRow(entry.item, entry.cat, container);
+    });
+
+    section.appendChild(container);
+    app.appendChild(section);
+  }
+
+  updateProgress();
+}
+
+function updateProgress() {
+  let total = 0, checked = 0;
+  CATEGORIES.forEach(cat => {
+    const items = state[cat.id] || [];
+    const named = items.filter(i => i.name.trim());
+    total += named.length;
+    checked += named.filter(i => i.checked).length;
+  });
+
+  const pct = total > 0 ? (checked / total * 100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressText').textContent =
+    total === 0 ? 'No items yet' :
+    checked === total ? `All done! ${total} items ✓` :
+    `${checked} of ${total} items`;
+}
+
+function uncheckAll() {
+  CATEGORIES.forEach(cat => {
+    (state[cat.id] || []).forEach(item => item.checked = false);
+  });
+  saveState();
+  render();
+}
+
+let allCollapsed = false;
+function toggleCollapseAll() {
+  allCollapsed = !allCollapsed;
+  CATEGORIES.forEach(cat => {
+    collapsed[cat.id] = allCollapsed;
+  });
+  recipesCollapsed = allCollapsed;
+  render();
+  renderRecipes();
+}
+
+// --- Settings menu ---
+function toggleSettings() {
+  const menu = document.getElementById('settingsMenu');
+  const overlay = document.getElementById('settingsOverlay');
+  const isOpen = menu.classList.contains('open');
+  if (isOpen) {
+    menu.classList.remove('open');
+    overlay.classList.remove('open');
+  } else {
+    menu.classList.add('open');
+    overlay.classList.add('open');
+    updateSettingsUI();
+  }
+}
+
+function updateSettingsUI() {
+  document.getElementById('sinkCheckedToggle').classList.toggle('on', settings.sinkChecked);
+  document.getElementById('darkModeToggle').classList.toggle('on', settings.darkMode);
+}
+
+function toggleSinkChecked() {
+  settings.sinkChecked = !settings.sinkChecked;
+  saveSettings();
+  updateSettingsUI();
+  render();
+}
+
+function toggleDarkMode() {
+  settings.darkMode = !settings.darkMode;
+  saveSettings();
+  document.body.classList.toggle('dark', settings.darkMode);
+  updateSettingsUI();
+}
+
+function checkForUpdates() {
+  const statusEl = document.getElementById('updateCheckStatus');
+  statusEl.textContent = 'Checking…';
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg) { statusEl.textContent = 'N/A'; return; }
+      reg.update().then(() => {
+        setTimeout(() => {
+          if (reg.waiting || reg.installing) {
+            statusEl.textContent = 'Update found!';
+            if (reg.waiting) showUpdateBanner(reg);
+          } else {
+            statusEl.textContent = 'Up to date';
+            setTimeout(() => { statusEl.textContent = ''; }, 2500);
+          }
+        }, 1200);
+      }).catch(() => { statusEl.textContent = 'Error'; });
+    });
+  } else {
+    statusEl.textContent = 'N/A';
+  }
+}
+
+
+function showClearModal() {
+  document.getElementById('clearModal').classList.add('active');
+}
+
+function hideClearModal() {
+  document.getElementById('clearModal').classList.remove('active');
+}
+
+function clearAll() {
+  CATEGORIES.forEach(cat => { state[cat.id] = []; });
+  // Deactivate all recipes but keep them saved
+  recipes.forEach(r => { r.active = false; });
+  saveState();
+  saveRecipes();
+  hideClearModal();
+  render();
+  renderRecipes();
+}
+
+function adjustColor(hex, amount) {
+  let r = parseInt(hex.slice(1,3), 16) + amount;
+  let g = parseInt(hex.slice(3,5), 16) + amount;
+  let b = parseInt(hex.slice(5,7), 16) + amount;
+  r = Math.max(0, Math.min(255, r));
+  g = Math.max(0, Math.min(255, g));
+  b = Math.max(0, Math.min(255, b));
+  return '#' + [r,g,b].map(c => c.toString(16).padStart(2,'0')).join('');
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Close modal on overlay tap
+document.getElementById('clearModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) hideClearModal();
+});
+
+// One-time migration: re-parse stored recipe ingredients through the new parser
+function migrateRecipes() {
+  const PARSER_VERSION = 10;  // bump this number when parser improves
+  try {
+    const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
+    if (currentVersion >= PARSER_VERSION) return;
+
+    let changed = false;
+    recipes.forEach(recipe => {
+      if (!recipe.ingredients) return;
+      recipe.ingredients = recipe.ingredients
+        .map(ing => {
+          let name = ing.name || '';
+          let qty = ing.qty || '';
+
+          // Strip Optional prefixes that survived previous migrations
+          name = name.replace(/^(?:optional|for the|for)\s*(?:toppings?|ingredients?|garnish(?:es)?|topping|serving|the sauce|the salad|the dressing)?[:\s]*/i, '').trim();
+
+          // If name contains "Juice of/and zest of N item", re-parse it
+          const juiceMatch = name.match(/^(?:juice|zest|juice and zest|zest and juice)\s+of\s+(\d+)\s+(.+)$/i);
+          if (juiceMatch) {
+            qty = juiceMatch[1];
+            name = juiceMatch[2];
+          }
+
+          // If qty is empty but name starts with a number, try to re-parse the whole thing
+          if (!qty && name.match(/^\d/)) {
+            const reparsed = parseIngredientString(name);
+            name = reparsed.name;
+            qty = reparsed.qty;
+          }
+
+          // Decode stray HTML entities ("&nbsp;") saved by older parsers
+          name = decodeEntities(name).replace(/\s+/g, ' ').trim();
+
+          // If the name starts with a unit that an older parser missed ("c. ketchup" with qty "3/4"),
+          // re-parse qty + name together so the unit moves into the quantity
+          if (qty && !extractUnit(qty.replace(/^[\d\s/.\-¼½¾⅓⅔⅛⅜⅝⅞]+/, '')) && extractUnit(name)) {
+            const reparsed = parseIngredientString(`${qty} ${name}`);
+            if (reparsed.name) { name = reparsed.name; qty = reparsed.qty; }
+          }
+
+          // Run through cleanIngName
+          name = cleanIngName(name);
+
+          // Re-format qty
+          qty = qty ? formatQtyString(qty) : '';
+
+          // Re-categorize
+          const category = name ? categorizeIngredient(name, qty) : (ing.category || 'pantry');
+
+          return { name, qty, category };
+        })
+        .filter(ing => ing.name && ing.name.length >= 2 && !shouldExcludeIngredient(ing.name) && !isJustUnit(ing.name));
+      changed = true;
+    });
+
+    if (changed) {
+      saveRecipes();
+      if (recipes.some(r => r.active)) {
+        rebuildGroceryList();
+      }
+    }
+
+    localStorage.setItem('parserVersion', String(PARSER_VERSION));
+  } catch(e) {
+    console.error('Migration error:', e);
+  }
+}
+
+// Startup — recover from IndexedDB if localStorage was cleared, then render
+async function startup() {
+  await openIDB();
+
+  // Apply dark mode immediately to avoid a flash
+  if (settings.darkMode) document.body.classList.add('dark');
+
+  // Ask the browser to make storage persistent (never auto-evict our data)
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const already = await navigator.storage.persisted();
+      if (!already) await navigator.storage.persist();
+    }
+  } catch(e) {}
+
+  // Recovery: if localStorage is empty but IndexedDB has data, restore it
+  try {
+    const lsRecipes = localStorage.getItem('groceryRecipes');
+    const lsState = localStorage.getItem('groceryList');
+
+    if (!lsRecipes || lsRecipes === '[]') {
+      const idbRecipes = await idbGet('groceryRecipes');
+      if (idbRecipes) {
+        const parsed = JSON.parse(idbRecipes);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          recipes = parsed;
+          localStorage.setItem('groceryRecipes', idbRecipes);
+        }
+      }
+    }
+
+    if (!lsState) {
+      const idbState = await idbGet('groceryList');
+      if (idbState) {
+        state = JSON.parse(idbState);
+        localStorage.setItem('groceryList', idbState);
+      }
+    }
+  } catch(e) {}
+
+  // Ensure current data is mirrored to IndexedDB
+  idbSet('groceryRecipes', JSON.stringify(recipes));
+  idbSet('groceryList', JSON.stringify(state));
+
+  migrateRecipes();
+
+  // Display app version
+  const versionEl = document.getElementById('appVersion');
+  if (versionEl) versionEl.textContent = APP_VERSION;
+
+  // Always rebuild if there are active recipes, to populate usedBy links
+  if (recipes.some(r => r.active)) {
+    rebuildGroceryList();
+  }
+
+  render();
+  renderRecipes();
+}
+
+startup();
+
+// Register service worker for PWA + handle update notifications
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // Check for updates periodically
+    setInterval(() => reg.update(), 60 * 1000);
+
+    // When a new service worker is waiting, show the update banner
+    function notifyUpdate() {
+      if (reg.waiting) showUpdateBanner(reg);
+    }
+    if (reg.waiting) notifyUpdate();
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (newWorker) {
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner(reg);
+          }
+        });
+      }
+    });
+  }).catch(() => {});
+
+  // Reload once the new worker takes control
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+}
+
+function showUpdateBanner(reg) {
+  if (document.getElementById('updateBanner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'updateBanner';
+  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:300;background:linear-gradient(135deg,#2D6A2E,#1B4B1C);color:#fff;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 -2px 16px rgba(0,0,0,0.2);font-family:inherit;';
+  banner.innerHTML = '<span style="font-size:14px;font-weight:500;">A new version is available</span>';
+  const btn = document.createElement('button');
+  btn.textContent = 'Update';
+  btn.style.cssText = 'background:#fff;color:#2D6A2E;border:none;border-radius:10px;padding:8px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;';
+  btn.onclick = () => {
+    if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    btn.textContent = 'Updating…';
+    btn.disabled = true;
+  };
+  banner.appendChild(btn);
+  document.body.appendChild(banner);
+}
+</script>
+</body>
+</html>
