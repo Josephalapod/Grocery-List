@@ -1,4 +1,4 @@
-const APP_VERSION = 'v1.6.0';
+const APP_VERSION = 'v1.6.1';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1157,6 +1157,7 @@ function cleanIngName(n) {
   n = n.replace(/^of\s+/i, '');
 
   n = n.replace(/\s+/g, ' ').trim();
+  if (/^pepper$/i.test(n)) n = 'black pepper';
   if (n.length < 2) return '';
   return n;
 }
@@ -1219,8 +1220,12 @@ function categorizeIngredient(name, qty) {
   }
 
   // HIGH PRIORITY pantry overrides — these collide with produce/meat keywords otherwise.
-  // "black pepper", "ground black pepper", "white pepper" → pantry (spice), not produce.
-  if (/\b(black|white|ground|cracked|whole)\s+pepper(corns?)?\b/.test(n) || /\bpeppercorns?\b/.test(n)) {
+  // "black pepper", "ground black pepper", "white pepper", or just "pepper" → pantry (spice), not produce.
+  if (/\b(black|white|ground|cracked|whole)\s+pepper(corns?)?\b/.test(n) || /\bpeppercorns?\b/.test(n) || /^(?:freshly\s+)?(?:ground\s+)?pepper$/.test(n)) {
+    return 'pantry';
+  }
+  // Jarred / preserved produce lives on the shelf
+  if (/\b(sun.?dried|oil.?packed|jarred|pickled|marinated|roasted red pepper)/.test(n) || /\b(olives?|capers|pepperoncini|giardiniera|artichoke hearts?)\b/.test(n)) {
     return 'pantry';
   }
   // "X powder/flakes/seasoning/salt/extract" where X is a produce/spice word → pantry
@@ -1684,7 +1689,7 @@ const PACK_SIZES = [
   [/\b(shredded|grated)?\s*(cheddar|mozzarella|monterey jack|pepper jack|colby|swiss|gouda|provolone|gruyere|cheese)\b/, { label: 'bag', vol: 96, wt: 8 }],
 
   // ---- Produce ----
-  [/^garlic$|\bgarlic cloves?\b/,           { label: 'head',      count: 10, unit: 'clove' }],
+  [/^garlic$|\bgarlic cloves?\b/,           { label: 'head',      count: 10, unit: 'clove', vol: 10 }],   // ~1 tsp minced per clove
   [/\bgreen onions?\b|\bscallions?\b/,      { label: 'bunch',     count: 6 }],
   [/\b(cilantro|parsley|basil|mint|dill|chives?|rosemary|thyme|sage|oregano|tarragon)\b/, { label: 'bunch', fixed: true }],
   [/\bginger\b/,                            { label: 'piece',     fixed: true }],
@@ -1724,6 +1729,8 @@ const PACK_SIZES = [
   [/\b(walnuts?|pecans?|almonds?|cashews?|pine nuts?|peanuts?|pistachios?)\b/, { label: 'bag', vol: 96, wt: 8 }],
   [/\b(raisins?|dried cranberr(?:y|ies)|dried fruit)\b/, { label: 'bag', vol: 96, wt: 8 }],
   [/\btortilla chips\b/,                    { label: 'bag',       fixed: true }],
+  [/\bsun.?dried tomato/,                    { label: 'jar',       vol: 48, wt: 8 }],
+  [/\b(roasted red pepper|artichoke heart|pepperoncini|giardiniera|olives?|capers|pickles?)\b/, { label: 'jar', vol: 96, wt: 12 }],
 ];
 
 // Anything in these categories measured by volume (cups/tbsp/tsp) is bought as one container
@@ -1744,7 +1751,11 @@ function purchaseQty(item, catId) {
   const key = itemNormKey(item);
   const override = settings.purchaseOverrides && settings.purchaseOverrides[key];
   if (override) return { buy: override, need };
-  if (!need) return { buy: '', need: '' };
+  // No amount at all ("scallions, for garnish") → one package if we know what it comes in
+  if (!need) {
+    for (const [re, pack] of PACK_SIZES) if (re.test(key) && pack.label) return { buy: `1 ${pack.label}`, need: '' };
+    return { buy: '', need: '' };
+  }
 
   const p = parseQty(need);
   if (!p) return { buy: need, need: '' };
@@ -1762,10 +1773,12 @@ function purchaseQty(item, catId) {
     else if (oz != null && pack.wt) count = oz / pack.wt;
     else if (!unit && pack.count) count = amt / pack.count;
     else if (unit && pack.unit && unit === pack.unit && pack.count) count = amt / pack.count;
-    if (count == null) break;   // matched but the recipe unit doesn't map — fall through to defaults
+    if (count == null) count = 1;   // matched but the recipe unit doesn't map — assume one package
     const n = Math.max(1, Math.ceil(count - 0.05));
     const label = pluralLabel(pack.label, n);
-    return { buy: label ? `${n} ${label}` : String(n), need };
+    // Skip the fine print when it would just repeat the number ("1 lime" / needs 1)
+    const redundant = !unit && Math.abs(amt - n) < 0.01;
+    return { buy: label ? `${n} ${label}` : String(n), need: redundant ? '' : need };
   }
 
   // Shelf-stable items measured by the spoon or cup → one jar/bottle/bag
@@ -2590,7 +2603,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 10;  // bump this number when parser improves
+  const PARSER_VERSION = 11;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
