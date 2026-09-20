@@ -1,7 +1,9 @@
-const CACHE_NAME = 'grocery-list-v22';
+const CACHE_NAME = 'grocery-list-v23';
 const ASSETS = [
   './',
   './index.html',
+  './app.js',
+  './styles.css',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -64,18 +66,21 @@ self.addEventListener('fetch', (event) => {
                      req.destination === 'document' ||
                      url.endsWith('/') ||
                      url.endsWith('index.html');
+  // app.js and styles.css are treated like the page: always fetch fresh when online
+  const isAppFile = /\/(app\.js|styles\.css)(\?.*)?$/.test(url);
 
-  if (isDocument) {
+  if (isDocument || isAppFile) {
+    const cacheKey = isDocument ? './index.html' : req;
     event.respondWith(
       fetch(new Request(req, { cache: 'reload' }))
         .then((resp) => {
           if (resp && resp.ok) {
             const clone = resp.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, clone));
           }
           return resp;
         })
-        .catch(() => caches.match('./index.html').then((c) => c || caches.match('./')))
+        .catch(() => caches.match(cacheKey).then((c) => c || (isDocument ? caches.match('./') : undefined)))
     );
     return;
   }
