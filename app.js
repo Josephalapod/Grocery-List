@@ -1,4 +1,4 @@
-const APP_VERSION = 'v1.6.1';
+const APP_VERSION = 'v1.6.2';
 
 const CATEGORIES = [
   { id: 'produce', name: 'Produce', color: '#3B9E3F', defaults: ['Bananas', 'Apples', 'Spinach', 'Tomatoes', 'Onions'] },
@@ -1070,7 +1070,7 @@ function parseIngredientString(raw) {
     'pinch(?:es)?', 'dash(?:es)?',
     'sprigs?', 'slices?', 'pieces?', 'heads?', 'stalks?', 'sticks?',
     'packages?', 'pkg', 'bags?', 'containers?', 'bottles?', 'jars?', 'boxes?',
-    'ears?', 'envelopes?',
+    'ears?', 'envelopes?', 'loa(?:f|ves)',
     'c',  // "c." = cup (Delish, Food Network, etc.) — keep last so longer units win
   ].join('|');
 
@@ -1115,7 +1115,15 @@ function cleanIngName(n) {
   // e.g. "chicken breasts or thighs" → "chicken breasts", "butter or olive oil" → "butter".
   // For "red or orange bell pepper" this yields "red" but the synonym table maps all
   // bell-pepper variants together downstream, so the final result is still correct.
-  n = n.replace(/\s+or\s+.*$/i, '').trim();
+  const orM = n.match(/^(\S+)\s+or\s+(\S+)\s+(.+)$/i);
+  const ADJ = /^(corn|flour|wheat|whole.?wheat|white|brown|red|green|yellow|orange|purple|black|sweet|russet|yukon|baby|fresh|dried|frozen|canned|lean|boneless|skinless|large|small|medium|mild|hot|spicy|smoked|plain|greek|regular|light|dark|golden|kosher|sea|table|unsalted|salted|salt|full.?fat|low.?fat|nonfat|skim|whole|2%|1%|extra.?firm|firm|soft|crunchy|creamy|chunky|smooth|thin|thick|jumbo|extra.?large)$/i;
+  if (orM && ADJ.test(orM[1])) {
+    // "Corn or flour tortillas" → "Corn tortillas";  "red or orange bell pepper" → "red bell pepper"
+    n = `${orM[1]} ${orM[3]}`;
+  } else {
+    // "chicken breasts or thighs" → "chicken breasts";  "butter or olive oil" → "butter"
+    n = n.replace(/\s+or\s+.*$/i, '').trim();
+  }
 
   // Only remove text after a comma if that text is a prep instruction,
   // NOT if it continues the ingredient name (e.g. "boneless, skinless chicken breasts").
@@ -1143,6 +1151,11 @@ function cleanIngName(n) {
     n = n.replace(/^ground\s+(?!(?:beef|turkey|pork|chicken|lamb|sausage|meat|bison|veal|venison)\b)/i, '');
   }
 
+  // Trailing prep words with no comma: "Lettuce finely chopped" → "Lettuce", "onion diced" → "onion"
+  const trailingPrep = /\s+(?:(?:very |finely |coarsely |roughly |thinly |thickly )?(?:chopped|diced|minced|sliced|grated|shredded|crushed|cubed|julienned|torn|beaten|whisked|melted|softened|divided|separated|drained|rinsed|peeled|trimmed|seeded|deveined|pitted|cored|halved|quartered|crumbled|mashed|pressed|squeezed|thawed|warmed|cooled|toasted|for serving|for garnish|for topping|to taste|as needed|optional|plus more))+$/i;
+  let prevT = '';
+  while (prevT !== n) { prevT = n; n = n.replace(trailingPrep, '').trim(); }
+
   // Simplify meat cuts: "chicken breast halves" → "chicken breast"
   n = n.replace(/\s+halves$/i, '');
   n = n.replace(/\s+half$/i, '');
@@ -1158,6 +1171,8 @@ function cleanIngName(n) {
 
   n = n.replace(/\s+/g, ' ').trim();
   if (/^pepper$/i.test(n)) n = 'black pepper';
+  // Normalize casing so "Tomatoes" and "tomatoes" look (and merge) the same
+  if (/^[A-Z]/.test(n) && n.slice(1) === n.slice(1).toLowerCase()) n = n.toLowerCase();
   if (n.length < 2) return '';
   return n;
 }
@@ -1225,7 +1240,7 @@ function categorizeIngredient(name, qty) {
     return 'pantry';
   }
   // Jarred / preserved produce lives on the shelf
-  if (/\b(sun.?dried|oil.?packed|jarred|pickled|marinated|roasted red pepper)/.test(n) || /\b(olives?|capers|pepperoncini|giardiniera|artichoke hearts?)\b/.test(n)) {
+  if (/\b(sun.?dried|oil.?packed|jarred|pickled|marinated|roasted red pepper)/.test(n) || (/\b(olives?|capers|pepperoncini|giardiniera|artichoke hearts?)\b/.test(n) && !/\bolive oil\b/.test(n))) {
     return 'pantry';
   }
   // "X powder/flakes/seasoning/salt/extract" where X is a produce/spice word → pantry
@@ -1240,6 +1255,19 @@ function categorizeIngredient(name, qty) {
   }
   // Broth / stock / bouillon → pantry even though they contain meat words
   if (/\b(broth|stock|bouillon|consomm)\b/.test(n)) {
+    return 'pantry';
+  }
+  // Bread products beat produce words inside them ("corn tortillas", "potato rolls")
+  if (/\b(tortillas?|buns?|rolls?|bread|pita|naan|bagels?|baguette|croissants?|flatbread|ciabatta|sourdough|brioche|hoagies?)\b/.test(n) && !/\b(crumbs?|breadcrumbs?|panko)\b/.test(n)) {
+    return 'bakery';
+  }
+  // Tomato products in a can/tube/bottle → pantry
+  if (/\btomato (paste|sauce|puree|purée)\b|\bketchup\b|\bsalsa\b/.test(n)) {
+    return 'pantry';
+  }
+  // Herbs measured by the teaspoon/tablespoon are the dried jar, not a fresh bunch → pantry
+  if (/\b(oregano|basil|thyme|rosemary|sage|parsley|cilantro|dill|mint|tarragon|marjoram|chives?|bay lea(?:f|ves)|herbs?)\b/.test(n)
+      && /^\s*[\d\s/.¼½¾⅓⅔⅛⅜⅝⅞]*\s*(tsp|teaspoons?|tbsp|tablespoons?)\b/.test(q)) {
     return 'pantry';
   }
   // Bottled/canned juices → beverages ("pineapple juice", "orange juice", "apple juice").
@@ -1262,7 +1290,7 @@ function categorizeIngredient(name, qty) {
     // Produce
     [/\b(lettuce|spinach|kale|arugula|cabbage|broccoli|cauliflower|carrot|celery|onion|garlic|ginger|tomato|pepper|bell pepper|jalapeño|jalapeno|chili|chile|potato|sweet potato|yam|corn|peas?|beans?|zucchini|squash|cucumber|avocado|mushroom|eggplant|artichoke|asparagus|beet|radish|turnip|leek|shallot|scallion|green onion|spring onion|lemon|lime|orange|apple|banana|(?:straw|blue|rasp|black|cran|goose|elder|boysen)?berr(?:y|ies)|grape|mango|pineapple|peach|pear|plum|melon|watermelon|coconut|cranberr(?:y|ies)|cherry|cherries|fig|kiwi|papaya|pomegranate|grapefruit|herb|basil|cilantro|parsley|mint|dill|rosemary|thyme|sage|oregano|chives?|tarragon|bay lea|lemongrass|fennel|endive|chard|bok choy|sprouts?|watercress|rhubarb|plantain|jicama|tomatillo)\b/, 'produce'],
     // Bakery
-    [/\b(bread|tortillas?|pita|naan|baguettes?|croissants?|rolls?|buns?|bagels?|muffins?|english muffins?|flatbreads?|ciabatta|sourdough|wraps?|croutons?|breadcrumbs?|panko|hoagies?|sub rolls?|brioche|focaccia|dinner rolls?)\b/, 'bakery'],
+    [/\b(bread|tortillas?|pita|naan|baguettes?|croissants?|rolls?|buns?|bagels?|muffins?|english muffins?|flatbreads?|ciabatta|sourdough|wraps?|croutons?|hoagies?|sub rolls?|brioche|focaccia|dinner rolls?)\b/, 'bakery'],
     // Frozen
     [/\b(frozen|ice cream|popsicle|freezer|frost)\b/, 'frozen'],
     // Beverages
@@ -1691,7 +1719,7 @@ const PACK_SIZES = [
   // ---- Produce ----
   [/^garlic$|\bgarlic cloves?\b/,           { label: 'head',      count: 10, unit: 'clove', vol: 10 }],   // ~1 tsp minced per clove
   [/\bgreen onions?\b|\bscallions?\b/,      { label: 'bunch',     count: 6 }],
-  [/\b(cilantro|parsley|basil|mint|dill|chives?|rosemary|thyme|sage|oregano|tarragon)\b/, { label: 'bunch', fixed: true }],
+  [/\b(cilantro|parsley|basil|mint|dill|chives?|rosemary|thyme|sage|oregano|tarragon)\b/, { label: 'bunch', fixed: true, spiceBelow: 12 }],  // under ¼ cup → dried jar
   [/\bginger\b/,                            { label: 'piece',     fixed: true }],
   [/\b(spinach|arugula|kale|spring mix|salad greens|lettuce)\b/, { label: 'bag', vol: 240, wt: 5 }],
   [/\bstrawberr/,                            { label: 'lb',        vol: 144, wt: 16 }],
@@ -1702,7 +1730,7 @@ const PACK_SIZES = [
   [/\bcarrots?\b/,                          { label: 'bag',       count: 8, vol: 240, wt: 16 }],
   [/\blemon/,                                { label: 'lemon',     vol: 9, count: 1 }],   // 1 lemon ≈ 3 tbsp juice
   [/\blime/,                                 { label: 'lime',      vol: 6, count: 1 }],   // 1 lime ≈ 2 tbsp juice
-  [/\bcorn\b/,                              { label: 'ear',       count: 1, vol: 36 }],
+  [/^corn$|\bcorn (on the cob|kernels?)$|\bears? of corn\b|\bsweet corn$/, { label: 'ear', count: 1, vol: 36 }],
   [/\bbroccoli|cauliflower\b/,              { label: 'head',      vol: 240, count: 1 }],
 
   // ---- Meat ----
@@ -1730,7 +1758,7 @@ const PACK_SIZES = [
   [/\b(raisins?|dried cranberr(?:y|ies)|dried fruit)\b/, { label: 'bag', vol: 96, wt: 8 }],
   [/\btortilla chips\b/,                    { label: 'bag',       fixed: true }],
   [/\bsun.?dried tomato/,                    { label: 'jar',       vol: 48, wt: 8 }],
-  [/\b(roasted red pepper|artichoke heart|pepperoncini|giardiniera|olives?|capers|pickles?)\b/, { label: 'jar', vol: 96, wt: 12 }],
+  [/\b(roasted red pepper|artichoke heart|pepperoncini|giardiniera|capers|pickles?)\b|\bolives?\b(?!\s*oil)/, { label: 'jar', vol: 96, wt: 12 }],
 ];
 
 // Anything in these categories measured by volume (cups/tbsp/tsp) is bought as one container
@@ -1754,7 +1782,7 @@ function purchaseQty(item, catId) {
   // No amount at all ("scallions, for garnish") → one package if we know what it comes in
   if (!need) {
     for (const [re, pack] of PACK_SIZES) if (re.test(key) && pack.label) return { buy: `1 ${pack.label}`, need: '' };
-    return { buy: '', need: '' };
+    return { buy: '1', need: '' };   // "tomatoes, chopped" for serving → just buy one
   }
 
   const p = parseQty(need);
@@ -1767,6 +1795,7 @@ function purchaseQty(item, catId) {
 
   for (const [re, pack] of PACK_SIZES) {
     if (!re.test(key)) continue;
+    if (pack.spiceBelow && tsp != null && tsp < pack.spiceBelow) return { buy: '1', need };
     let count = null;
     if (pack.fixed) count = 1;
     else if (tsp != null && pack.vol) count = tsp / pack.vol;
@@ -2015,7 +2044,7 @@ function extractUnit(str) {
     'pinch(?:es)?', 'dash(?:es)?',
     'sprigs?', 'slices?', 'pieces?', 'heads?', 'stalks?', 'sticks?',
     'packages?', 'pkg', 'bags?', 'containers?', 'bottles?', 'jars?', 'boxes?',
-    'ears?', 'envelopes?',
+    'ears?', 'envelopes?', 'loa(?:f|ves)',
     'c',
   ];
 
@@ -2603,7 +2632,7 @@ document.getElementById('clearModal').addEventListener('click', (e) => {
 
 // One-time migration: re-parse stored recipe ingredients through the new parser
 function migrateRecipes() {
-  const PARSER_VERSION = 11;  // bump this number when parser improves
+  const PARSER_VERSION = 12;  // bump this number when parser improves
   try {
     const currentVersion = parseInt(localStorage.getItem('parserVersion') || '0');
     if (currentVersion >= PARSER_VERSION) return;
